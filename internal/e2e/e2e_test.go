@@ -1441,3 +1441,44 @@ func TestLearnsFromRunningStream(t *testing.T) {
 		return en.Frequency == 177000000 && en.Program == 2
 	})
 }
+
+// The tuners page lists, for every tuner, the channels being watched, how many
+// clients there are and where they are.
+func TestTunersPageListsClients(t *testing.T) {
+	e := setup(t, []int{2}, 2, nil)
+	a, _ := e.open("/auto/v7.1")
+	b, _ := e.open("/auto/v7.2") // joins the same tuner
+	c, _ := e.open("/auto/v14.1")
+	for _, x := range []*client{a, b, c} {
+		if x == nil {
+			t.Fatal("stream refused")
+		}
+		defer x.close()
+		x.read(t, 188*50)
+	}
+	resp, err := http.Get(e.api + "/tuners.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	page := string(body)
+	for _, want := range []string{"3 client(s) on 2 of 2 tuner(s)", "7.1 ALPHA", "7.2 BETA", "14.1 GAMMA", "127.0.0.1"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+	if strings.Count(page, "127.0.0.1 &mdash;") != 3 {
+		t.Errorf("want three client lines:\n%s", page)
+	}
+	var dj map[string]any
+	getJSON(t, e.api+"/discover.json", &dj)
+	if m := fmt.Sprint(dj["Manufacturer"]); strings.Contains(strings.ToLower(m), "silicon") {
+		t.Errorf("Manufacturer %q", m)
+	}
+	xml, _ := http.Get(e.api + "/device.xml")
+	xb, _ := io.ReadAll(xml.Body)
+	if strings.Contains(strings.ToLower(string(xb)), "silicon") {
+		t.Errorf("device.xml mentions the vendor:\n%s", xb)
+	}
+}

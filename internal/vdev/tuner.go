@@ -48,6 +48,7 @@ type VTuner struct {
 	// control client's subscription). httpOpened: the tuner was opened by HTTP
 	// and is released with its last viewer.
 	httpSubs   []*hub.Sub
+	viewers    map[*hub.Sub]viewerMeta // who is behind each HTTP viewer
 	httpOpened bool
 	lockkey    uint32
 	lockIP     string
@@ -171,7 +172,7 @@ func (v *VTuner) releaseAll(clearTarget bool) {
 	v.mu.Lock()
 	v.tuned, v.chanStr, v.vchannel = false, "none", ""
 	v.program, v.explicit, v.httpUse = 0, false, false
-	v.httpSubs, v.httpOpened = nil, false
+	v.httpSubs, v.httpOpened, v.viewers = nil, false, nil
 	if clearTarget {
 		v.targetStr = "none"
 	}
@@ -260,12 +261,85 @@ func (v *VTuner) joinHTTP(ctx context.Context, spec chanmap.Spec, program uint16
 	return sub, nil
 }
 
+// viewerMeta says who an HTTP viewer is.
+type viewerMeta struct {
+	client string // IP address
+	label  string // channel as requested: a guide number or a /chFREQ path
+	since  time.Time
+}
+
+// noteViewer records the client behind a viewer for the status page.
+func (v *VTuner) noteViewer(sub *hub.Sub, m viewerMeta) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.viewers == nil {
+		v.viewers = map[*hub.Sub]viewerMeta{}
+	}
+	v.viewers[sub] = m
+}
+
+// ViewerRow is one client of a tuner as shown on the status page.
+type ViewerRow struct {
+	Client  string
+	Label   string
+	Since   time.Time
+	BPS     int
+	Queue   int // % of the client buffer in use
+	Drops   uint64
+	Control bool // a control-protocol client (target=...) rather than HTTP
+}
+
+// viewerRows lists the clients currently attached to the tuner.
+func (v *VTuner) viewerRows() []ViewerRow {
+	v.mu.Lock()
+	type pair struct {
+		sub *hub.Sub
+		m   viewerMeta
+	}
+	var hs []pair
+	for _, s := range v.httpSubs {
+		hs = append(hs, pair{s, v.viewers[s]})
+	}
+	sub, tgt, vch, spec := v.sub, v.targetStr, v.vchannel, v.spec
+	controlled := v.snd != nil
+	since := v.lastUse
+	v.mu.Unlock()
+
+	var rows []ViewerRow
+	for _, h := range hs {
+		bps, _ := h.sub.Rate()
+		q := 0
+		if c := cap(h.sub.C); c > 0 {
+			q = h.sub.Buffered() * 100 / c
+		}
+		rows = append(rows, ViewerRow{Client: h.m.client, Label: h.m.label, Since: h.m.since, BPS: bps, Queue: q, Drops: h.sub.Drops()})
+	}
+	if controlled && sub != nil {
+		host := ""
+		if i := strings.Index(tgt, "://"); i >= 0 {
+			host, _, _ = net.SplitHostPort(tgt[i+3:])
+		}
+		label := vch
+		if label == "" {
+			label = spec.String()
+		}
+		bps, _ := sub.Rate()
+		q := 0
+		if c := cap(sub.C); c > 0 {
+			q = sub.Buffered() * 100 / c
+		}
+		rows = append(rows, ViewerRow{Client: host, Label: label, Since: since, BPS: bps, Queue: q, Drops: sub.Drops(), Control: true})
+	}
+	return rows
+}
+
 // endHTTP detaches one HTTP viewer; the tuner is released with the last one
 // unless a control-protocol client opened it.
 func (v *VTuner) endHTTP(sub *hub.Sub) {
 	v.op.Lock()
 	defer v.op.Unlock()
 	v.mu.Lock()
+	delete(v.viewers, sub)
 	for i, s := range v.httpSubs {
 		if s == sub {
 			v.httpSubs = append(v.httpSubs[:i], v.httpSubs[i+1:]...)
@@ -588,6 +662,12 @@ func (v *VTuner) idleNow() bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	return !v.busyLocked() && !v.lockedLocked()
+}
+
+func (v *VTuner) currentSub() *hub.Sub {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.sub
 }
 
 func (v *VTuner) isTuned() bool {

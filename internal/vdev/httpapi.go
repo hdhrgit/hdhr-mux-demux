@@ -304,26 +304,49 @@ func (d *Device) handleLineupHTML(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Device) handleTunersHTML(w http.ResponseWriter, r *http.Request) {
-	d.page(w, "HDHomeRun Tuner Status", "Tuner Status", func() {
-		fmt.Fprint(w, "<table><tr><th>Tuner<th>Physical<th>Channel<th>Status<th>Target<th>Queue<th>Dropped")
-		pool := d.hub.Pool()
-		for _, v := range d.tuners {
-			phys := ""
-			if ref, ok := pool.Resolve(v.idx); ok {
-				phys = fmt.Sprintf("%s/%d", hdhrproto.FormatDeviceID(ref.DeviceID), ref.Index)
+	pool := d.hub.Pool()
+	type row struct {
+		v       *VTuner
+		phys    string
+		viewers []ViewerRow
+	}
+	var rows []row
+	clients, busy := 0, 0
+	for _, v := range d.tuners {
+		phys := ""
+		if ref, ok := pool.Resolve(v.idx); ok {
+			phys = fmt.Sprintf("%s/%d", hdhrproto.FormatDeviceID(ref.DeviceID), ref.Index)
+		}
+		if sub := v.currentSub(); sub != nil {
+			if id := sub.Info().TunerID; id != phys {
+				phys += " → " + id
 			}
-			v.mu.Lock()
-			tgt, vch, sub := v.targetStr, v.vchannel, v.sub
-			v.mu.Unlock()
-			queue, drops := "", ""
-			if sub != nil {
-				info := sub.Info()
-				phys += " → " + info.TunerID
-				queue = fmt.Sprintf("%d%%", sub.Buffered()*100/cap(sub.C))
-				drops = fmt.Sprint(sub.Drops())
+		}
+		vs := v.viewerRows()
+		clients += len(vs)
+		if len(vs) > 0 {
+			busy++
+		}
+		rows = append(rows, row{v, phys, vs})
+	}
+	d.page(w, "HDHomeRun Tuner Status", fmt.Sprintf("Tuner Status: %d client(s) on %d of %d tuner(s)", clients, busy, len(d.tuners)), func() {
+		fmt.Fprint(w, "<table><tr><th>Tuner<th>Physical<th>Status<th>Clients<th>Channel, client, time, rate, buffer")
+		for _, rw := range rows {
+			fmt.Fprintf(w, "<tr><td>tuner%d<td>%s<td>%s<td>%d<td>", rw.v.idx, html.EscapeString(rw.phys),
+				html.EscapeString(rw.v.statusString()), len(rw.viewers))
+			for _, vw := range rw.viewers {
+				name := ""
+				if e, ok := d.lineup.Find(vw.Label); ok {
+					name = " " + e.GuideName
+				}
+				kind := ""
+				if vw.Control {
+					kind = " (control)"
+				}
+				fmt.Fprintf(w, "%s%s &mdash; %s%s &mdash; %s &mdash; %.1f Mbps &mdash; buffer %d%%, dropped %d<br>",
+					html.EscapeString(vw.Label), html.EscapeString(name), html.EscapeString(vw.Client), kind,
+					time.Since(vw.Since).Round(time.Second), float64(vw.BPS)/1e6, vw.Queue, vw.Drops)
 			}
-			fmt.Fprintf(w, "<tr><td>tuner%d<td>%s<td>%s<td>%s<td>%s<td>%s<td>%s", v.idx, html.EscapeString(phys), html.EscapeString(vch),
-				html.EscapeString(v.statusString()), html.EscapeString(tgt), queue, drops)
 		}
 		fmt.Fprint(w, "</table>")
 	})
@@ -571,6 +594,12 @@ func (d *Device) handleStream(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	client, _, _ := net.SplitHostPort(r.RemoteAddr)
+	label := rq.vchannel
+	if label == "" {
+		label = ch
+	}
+	v.noteViewer(sub, viewerMeta{client: client, label: label, since: time.Now()})
 	defer v.endHTTP(sub)
 
 	var limit <-chan time.Time

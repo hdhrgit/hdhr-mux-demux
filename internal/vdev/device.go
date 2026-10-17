@@ -72,7 +72,7 @@ func (c *Config) defaults() {
 		c.FriendlyName = "HDHomeRun Mux"
 	}
 	if c.Manufacturer == "" {
-		c.Manufacturer = "Silicondust"
+		c.Manufacturer = "hdhr-mux"
 	}
 	if c.ModelNumber == "" {
 		c.ModelNumber = "HDHR-MUX"

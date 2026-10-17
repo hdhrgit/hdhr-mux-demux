@@ -1,4 +1,4 @@
-// Package hdhrproto implements the SiliconDust HDHomeRun discovery and
+// Package hdhrproto implements the HDHomeRun discovery and
 // control wire protocol (UDP/TCP port 65001): framing, TLV tags, CRC and
 // device-ID helpers.
 package hdhrproto
