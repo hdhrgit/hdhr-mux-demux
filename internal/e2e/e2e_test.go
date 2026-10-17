@@ -50,9 +50,10 @@ type env struct {
 
 // Knobs a test may set (and must restore) before calling setup.
 var (
-	testMode   = ""               // upstream transport: "" = http, or "rtp"
-	testLinger = time.Duration(0) // hub linger
-	testBuffer = 0                // hub client buffer in bytes (0 = default)
+	testMode   = ""                        // upstream transport: "" = http, or "rtp"
+	testLinger = time.Duration(0)          // hub linger
+	testBuffer = 0                         // hub client buffer in bytes (0 = default)
+	testTuners func(ids []uint32) []string // upstream tuner list, built from the fake device IDs
 )
 
 func setup(t *testing.T, physTuners []int, virtual int, mod func(*vdev.Config)) *env {
@@ -68,7 +69,15 @@ func setup(t *testing.T, physTuners []int, virtual int, mod func(*vdev.Config)) 
 		e.fakes = append(e.fakes, f)
 		addrs = append(addrs, f.Addr())
 	}
-	pool, err := upstream.NewPool(upstream.Config{Devices: addrs, WaitFree: 2 * time.Second, Mode: testMode})
+	var tuners []string
+	if testTuners != nil {
+		var ids []uint32
+		for _, f := range e.fakes {
+			ids = append(ids, f.ID())
+		}
+		tuners = testTuners(ids)
+	}
+	pool, err := upstream.NewPool(upstream.Config{Devices: addrs, WaitFree: 2 * time.Second, Mode: testMode, Tuners: tuners})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1481,4 +1490,72 @@ func TestTunersPageListsClients(t *testing.T) {
 	if strings.Contains(strings.ToLower(string(xb)), "silicon") {
 		t.Errorf("device.xml mentions the vendor:\n%s", xb)
 	}
+}
+
+// With a tuner list the multiplexer is made of exactly those tuners: they are
+// the only ones used, they are numbered from 0, and nothing else is touched.
+func TestTunerListDefinesTheVirtualDevice(t *testing.T) {
+	testTuners = func(ids []uint32) []string { return []string{hdhrproto.FormatDeviceID(ids[0]) + "/2-3"} }
+	defer func() { testTuners = nil }()
+	e := setup(t, []int{4}, 2, nil)
+
+	var dj map[string]any
+	getJSON(t, e.api+"/discover.json", &dj)
+	if dj["TunerCount"].(float64) != 2 {
+		t.Fatalf("TunerCount %v, want 2", dj["TunerCount"])
+	}
+	a, ra := e.open("/auto/v7.1")
+	b, _ := e.open("/auto/v14.1")
+	if a == nil || b == nil {
+		t.Fatal("streams refused")
+	}
+	defer a.close()
+	defer b.close()
+	a.read(t, 188*20)
+	b.read(t, 188*20)
+	got := e.fakes[0].TunedChannels()
+	if got[0] != "none" || got[1] != "none" || got[2] == "none" || got[3] == "none" {
+		t.Fatalf("physical tuners in use %v, want only 2 and 3", got)
+	}
+	if r := ra.Header.Get("X-HDHomeRun-Resource"); r != "tuner0" && r != "tuner1" {
+		t.Fatalf("resource %q: the listed tuners are numbered from 0", r)
+	}
+	e.lu.Replace(append(append([]lineup.Entry{}, testLineup...), extraLineup...))
+	_, resp := e.open("/auto/v36.1") // a third channel: both listed tuners are taken
+	if resp.StatusCode != 503 {
+		t.Fatalf("third channel: %d", resp.StatusCode)
+	}
+	if n := e.fakes[0].Peak(); n > 2 {
+		t.Fatalf("peak %d physical tuners in use", n)
+	}
+}
+
+// Hidden: not discoverable by wildcard, still reachable by device ID or address.
+func TestNotDiscoverable(t *testing.T) {
+	e := setup(t, []int{1}, 1, func(c *vdev.Config) { c.Hidden = true })
+	if infos, _ := hdhrproto.Discover([]string{e.ctl}, 600*time.Millisecond); len(infos) != 0 {
+		t.Fatalf("a hidden multiplexer answered wildcard discovery: %+v", infos)
+	}
+	req := &hdhrproto.Packet{Type: hdhrproto.TypeDiscoverReq}
+	req.AddU32(hdhrproto.TagDeviceType, hdhrproto.DeviceTypeTuner)
+	req.AddU32(hdhrproto.TagDeviceID, e.dev.ID())
+	c, _ := net.Dial("udp", e.ctl)
+	defer c.Close()
+	c.Write(req.Encode())
+	c.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 1024)
+	n, err := c.Read(buf)
+	if err != nil {
+		t.Fatalf("no answer to a request naming its device ID: %v", err)
+	}
+	if p, err := hdhrproto.Decode(buf[:n]); err != nil || p.Type != hdhrproto.TypeDiscoverRpy {
+		t.Fatalf("bad answer: %v %v", p, err)
+	}
+	ctl := hdhrproto.NewControl(e.ctl)
+	defer ctl.Close()
+	if v, err := ctl.Get("/sys/model"); err != nil || v == "" {
+		t.Fatalf("direct control connection: %q %v", v, err)
+	}
+	var dj map[string]any
+	getJSON(t, e.api+"/discover.json", &dj)
 }

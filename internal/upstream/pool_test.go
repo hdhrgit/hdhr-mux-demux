@@ -92,3 +92,34 @@ func TestIgnoresOtherMultiplexers(t *testing.T) {
 		t.Fatalf("%d tuners, want only the 2 of the real device", got)
 	}
 }
+
+// A tuner list restricts the pool and the numbering to exactly those tuners.
+func TestTunerUseList(t *testing.T) {
+	a, b := fake(t, 0x10100000, 4), fake(t, 0x10200000, 2)
+	aid, bid := hdhrproto.FormatDeviceID(a.ID()), hdhrproto.FormatDeviceID(b.ID())
+	p, err := upstream.NewPool(upstream.Config{Devices: []string{a.Addr(), b.Addr()}, Tuners: []string{aid + "/1-2", bid}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Refresh()
+	if got := p.TotalTuners(); got != 4 {
+		t.Fatalf("%d tuners, want a/1 a/2 b/0 b/1", got)
+	}
+	for g, want := range []struct {
+		dev uint32
+		idx int
+	}{{a.ID(), 1}, {a.ID(), 2}, {b.ID(), 0}, {b.ID(), 1}} {
+		ref, ok := p.Resolve(g)
+		if !ok || ref.DeviceID != want.dev || ref.Index != want.idx {
+			t.Errorf("tuner %d = %08X/%d, want %08X/%d", g, ref.DeviceID, ref.Index, want.dev, want.idx)
+		}
+	}
+	if p.GlobalOf(a.ID(), 0) != -1 || p.GlobalOf(a.ID(), 3) != -1 {
+		t.Error("tuners outside the list must not be numbered")
+	}
+	for _, bad := range []string{"nothex", aid + "/x", aid + "/3-1"} {
+		if _, err := upstream.NewPool(upstream.Config{Tuners: []string{bad}}); err == nil {
+			t.Errorf("%q should be rejected", bad)
+		}
+	}
+}

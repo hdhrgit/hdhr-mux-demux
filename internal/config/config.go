@@ -41,8 +41,12 @@ type Config struct {
 	ControlListen string `json:"control_listen"` // default ":65001"
 	AdvertiseHost string `json:"advertise_host"`
 	SSDP          *bool  `json:"ssdp"`
-	LogRequests   bool   `json:"log_requests"` // log every client request (diagnostics)
-	PprofListen   string `json:"pprof_listen"` // e.g. "127.0.0.1:6060": Go profiling endpoint (off by default)
+	// Discoverable (default true) lets clients find the multiplexer: it answers
+	// wildcard UDP discovery and announces itself over SSDP. When false it is
+	// only found by those who know its address or device ID.
+	Discoverable *bool  `json:"discoverable"`
+	LogRequests  bool   `json:"log_requests"` // log every client request (diagnostics)
+	PprofListen  string `json:"pprof_listen"` // e.g. "127.0.0.1:6060": Go profiling endpoint (off by default)
 
 	StateDir string `json:"state_dir"` // lineup.json and device id live here
 
@@ -58,13 +62,16 @@ type Config struct {
 type Upstream struct {
 	Discover       *bool    `json:"discover"` // broadcast discovery (default true)
 	DiscoverTarget []string `json:"discover_targets"`
-	Devices        []string `json:"devices"`     // static addresses, "host" or "host:port"
-	Allow          []string `json:"allow"`       // device IDs to use (empty = all found)
-	Exclude        []string `json:"exclude"`     // "DEVICEID/tuner" never to use
-	Mode           string   `json:"mode"`        // "http" (default), "rtp" or "udp"
-	StreamPort     int      `json:"stream_port"` // device streaming port (default 5004)
-	LocalIP        string   `json:"local_ip"`    // address devices should stream to
-	WaitFree       Duration `json:"wait_free"`
+	Devices        []string `json:"devices"` // static addresses, "host" or "host:port"
+	Allow          []string `json:"allow"`   // device IDs to use (empty = all found)
+	// Tuners lists the tuners to use: "DEVICEID", "DEVICEID/N" or "DEVICEID/N-M"
+	// (empty = all). Only these are used and numbered.
+	Tuners     []string `json:"tuners"`
+	Exclude    []string `json:"exclude"`     // "DEVICEID/tuner" never to use
+	Mode       string   `json:"mode"`        // "http" (default), "rtp" or "udp"
+	StreamPort int      `json:"stream_port"` // device streaming port (default 5004)
+	LocalIP    string   `json:"local_ip"`    // address devices should stream to
+	WaitFree   Duration `json:"wait_free"`
 }
 
 type Lineup struct {
@@ -77,6 +84,44 @@ type Lineup struct {
 	Refresh       Duration          `json:"refresh"`       // re-read the devices' lineups this often (default 10m, -1s = never)
 	// ScanTuners limits tuners used per device by a scan (0 = every free one).
 	ScanTuners int `json:"scan_tuners_per_device"`
+}
+
+// applyEnv lets the environment override the file, using the same variable
+// names as the hdhomerunsignal tool where they mean the same thing:
+//
+//	HDHOMERUN_DEVICES            comma-separated IPs/hostnames of devices to use,
+//	                             in addition to auto-discovery
+//	HDHOMERUN_DISABLE_DISCOVERY  "true": no auto-discovery, only HDHOMERUN_DEVICES
+//	HDHOMERUN_TUNERS             comma-separated tuners to use (DEVICEID, DEVICEID/N,
+//	                             DEVICEID/N-M); replaces upstream.tuners
+//	HDHOMERUN_DISCOVERABLE       "false": do not let clients discover the multiplexer
+func applyEnv(c *Config) {
+	split := func(v string) []string {
+		var out []string
+		for _, s := range strings.Split(v, ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	if v := os.Getenv("HDHOMERUN_DEVICES"); v != "" {
+		c.Upstream.Devices = append(c.Upstream.Devices, split(v)...)
+	}
+	if v := strings.ToLower(os.Getenv("HDHOMERUN_DISABLE_DISCOVERY")); v == "true" || v == "1" {
+		f := false
+		c.Upstream.Discover = &f
+	}
+	if v := os.Getenv("HDHOMERUN_TUNERS"); v != "" {
+		c.Upstream.Tuners = split(v)
+	}
+	if v := strings.ToLower(os.Getenv("HDHOMERUN_DISCOVERABLE")); v == "false" || v == "0" {
+		f := false
+		c.Discoverable = &f
+	} else if v == "true" || v == "1" {
+		t := true
+		c.Discoverable = &t
+	}
 }
 
 func Load(path string) (*Config, error) {
@@ -109,6 +154,11 @@ func Load(path string) (*Config, error) {
 		t := true
 		c.SSDP = &t
 	}
+	if c.Discoverable == nil {
+		t := true
+		c.Discoverable = &t
+	}
+	applyEnv(c)
 	if c.StreamListen == "" {
 		c.StreamListen = ":5004"
 	}

@@ -53,6 +53,10 @@ type Config struct {
 	// AdvertiseHost overrides the host placed in BaseURL for discovery.
 	AdvertiseHost string
 	SSDP          bool
+	// Hidden stops the multiplexer advertising itself: wildcard UDP discovery
+	// requests are not answered and SSDP is not started. Requests naming its
+	// device ID, and direct connections, still work.
+	Hidden bool
 	// LogRequests logs every discovery, control and HTTP request received,
 	// for finding out what a client asks for.
 	LogRequests bool
@@ -198,7 +202,7 @@ func (d *Device) Start() error {
 		d.wg.Add(1)
 		go d.lineupLoop()
 	}
-	if d.cfg.SSDP {
+	if d.cfg.SSDP && !d.cfg.Hidden {
 		d.ssdp = newSSDP(d)
 		if err := d.ssdp.start(); err != nil {
 			log.Printf("ssdp disabled: %v", err)
@@ -319,6 +323,9 @@ func (d *Device) Discover(remote net.IP, devType, devID uint32) *hdhrproto.Packe
 	}
 	if devID != hdhrproto.DeviceIDWildcard && devID != d.cfg.DeviceID {
 		return nil
+	}
+	if d.cfg.Hidden && devID == hdhrproto.DeviceIDWildcard {
+		return nil // not discoverable: only answer those who ask for us by ID
 	}
 	base := d.baseURL(localFor(remote))
 	r := &hdhrproto.Packet{Type: hdhrproto.TypeDiscoverRpy}

@@ -34,6 +34,10 @@ type Config struct {
 	Devices []string
 	// AllowIDs restricts the pool to these device IDs (hex). Empty = all.
 	AllowIDs []string
+	// Tuners restricts the pool to the listed tuners: "DEVICEID" (all of a
+	// device's tuners), "DEVICEID/N" or "DEVICEID/N-M". Empty = all. Only listed
+	// tuners are used and numbered, so the virtual device has exactly those.
+	Tuners []string
 	// ExcludeTuners lists tuners the pool must never use, "DEVICEID/N".
 	ExcludeTuners []string
 	// IgnoreIDs are never used (the multiplexer's own device ID).
@@ -122,7 +126,14 @@ type Pool struct {
 	changed chan struct{} // closed & replaced whenever availability may have changed
 	allow   map[uint32]bool
 	exclude map[tkey]bool
+	use     map[tkey]bool   // explicitly listed tuners (Config.Tuners)
+	useDev  map[uint32]bool // devices listed without a tuner number
 	ignore  map[uint32]bool
+
+	// The global numbering: the tuners the pool may use, in order. Rebuilt
+	// whenever devices or the configuration change.
+	number []tkey
+	global map[tkey]int
 
 	// Reclaim, if set, is asked to free a physical tuner held for no one
 	// (a lingering stream) when all are taken. accept reports whether a given
@@ -155,6 +166,7 @@ func NewPool(cfg Config) (*Pool, error) {
 		cfg: cfg, devices: map[uint32]*Device{}, busy: map[tkey]bool{}, avoid: map[tkey]time.Time{},
 		caps: map[tkey]capability{}, scan: map[tkey]bool{}, changed: make(chan struct{}),
 		allow: map[uint32]bool{}, exclude: map[tkey]bool{}, ignore: map[uint32]bool{},
+		use: map[tkey]bool{}, useDev: map[uint32]bool{}, global: map[tkey]int{},
 	}
 	for _, s := range cfg.AllowIDs {
 		id, err := hdhrproto.ParseDeviceID(strings.ToUpper(s))
@@ -172,6 +184,31 @@ func NewPool(cfg Config) (*Pool, error) {
 		}
 		p.exclude[tkey{id, n}] = true
 	}
+	for _, s := range cfg.Tuners {
+		dev, spec, hasIdx := strings.Cut(strings.TrimSpace(s), "/")
+		id, err := hdhrproto.ParseDeviceID(strings.ToUpper(dev))
+		if err != nil {
+			return nil, fmt.Errorf("bad tuners entry %q: %v", s, err)
+		}
+		if !hasIdx {
+			p.useDev[id] = true
+			continue
+		}
+		lo, hi := 0, 0
+		if a, b, isRange := strings.Cut(spec, "-"); isRange {
+			lo, _ = strconv.Atoi(a)
+			hi, err = strconv.Atoi(b)
+		} else {
+			lo, err = strconv.Atoi(spec)
+			hi = lo
+		}
+		if err != nil || lo < 0 || hi < lo {
+			return nil, fmt.Errorf("bad tuners entry %q (want DEVICEID, DEVICEID/N or DEVICEID/N-M)", s)
+		}
+		for n := lo; n <= hi; n++ {
+			p.use[tkey{id, n}] = true
+		}
+	}
 	for _, id := range cfg.IgnoreIDs {
 		p.ignore[id] = true
 	}
@@ -182,7 +219,41 @@ func NewPool(cfg Config) (*Pool, error) {
 			}
 		}
 	}
+	p.rebuildLocked()
 	return p, nil
+}
+
+// includedLocked reports whether the pool may use (and number) a tuner.
+func (p *Pool) includedLocked(k tkey) bool {
+	if p.exclude[k] {
+		return false
+	}
+	if len(p.allow) > 0 && !p.allow[k.dev] {
+		return false
+	}
+	if len(p.use) > 0 || len(p.useDev) > 0 {
+		return p.use[k] || p.useDev[k.dev]
+	}
+	return true
+}
+
+// rebuildLocked recomputes the global numbering: every usable tuner of every
+// known device in device order, so excluded tuners leave no holes.
+func (p *Pool) rebuildLocked() {
+	p.number = p.number[:0]
+	p.global = map[tkey]int{}
+	for _, o := range p.order {
+		id, err := hdhrproto.ParseDeviceID(o.ID)
+		if err != nil {
+			continue
+		}
+		for i := 0; i < o.Tuners; i++ {
+			if k := (tkey{id, i}); p.includedLocked(k) {
+				p.global[k] = len(p.number)
+				p.number = append(p.number, k)
+			}
+		}
+	}
 }
 
 func (p *Pool) saveOrderLocked() {
@@ -269,10 +340,22 @@ func (p *Pool) Refresh() {
 		p.devices[d.ID] = d
 		p.registerLocked(d)
 		p.notifyLocked()
-		first := p.offset(d.ID)
+		usable, first := 0, -1
+		for i := 0; i < d.TunerCount; i++ {
+			if g, ok := p.global[tkey{d.ID, i}]; ok {
+				usable++
+				if first < 0 {
+					first = g
+				}
+			}
+		}
 		p.mu.Unlock()
-		log.Printf("upstream: device %s (%s) at %s with %d tuner(s), tuners %d-%d",
-			hdhrproto.FormatDeviceID(d.ID), d.Model, d.Addr(), d.TunerCount, first, first+d.TunerCount-1)
+		if usable == 0 {
+			log.Printf("upstream: device %s (%s) at %s: none of its tuners is in use", hdhrproto.FormatDeviceID(d.ID), d.Model, d.Addr())
+		} else {
+			log.Printf("upstream: device %s (%s) at %s with %d tuner(s), %d usable as tuners %d-%d",
+				hdhrproto.FormatDeviceID(d.ID), d.Model, d.Addr(), d.TunerCount, usable, first, first+usable-1)
+		}
 	}
 }
 
@@ -294,6 +377,7 @@ func (p *Pool) registerLocked(d *Device) {
 		p.order = append(p.order, orderEntry{id, d.TunerCount})
 		p.saveOrderLocked()
 	}
+	p.rebuildLocked()
 	for i := 0; i < d.TunerCount; i++ {
 		k := tkey{d.ID, i}
 		switch {
@@ -308,19 +392,6 @@ func (p *Pool) registerLocked(d *Device) {
 			p.caps[k] = capUnknown
 		}
 	}
-}
-
-// offset is the global number of a device's first tuner.
-func (p *Pool) offset(id uint32) int {
-	want := hdhrproto.FormatDeviceID(id)
-	n := 0
-	for _, o := range p.order {
-		if o.ID == want {
-			return n
-		}
-		n += o.Tuners
-	}
-	return -1
 }
 
 // Run keeps the inventory fresh until ctx is cancelled.
@@ -345,29 +416,27 @@ type TunerRef struct {
 	Device   *Device // nil while the device is offline
 }
 
-// Tuners lists every tuner of every known device (including offline devices
-// remembered from earlier runs) in the stable global order.
+// Tuners lists every tuner the pool may use, including those of devices
+// that are offline right now (remembered from earlier runs), in global order.
 func (p *Pool) Tuners() []TunerRef {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	var out []TunerRef
-	for _, o := range p.order {
-		id, _ := hdhrproto.ParseDeviceID(o.ID)
-		d := p.devices[id]
-		for i := 0; i < o.Tuners; i++ {
-			out = append(out, TunerRef{Global: len(out), DeviceID: id, Index: i, Device: d})
-		}
+	out := make([]TunerRef, len(p.number))
+	for g, k := range p.number {
+		out[g] = TunerRef{Global: g, DeviceID: k.dev, Index: k.idx, Device: p.devices[k.dev]}
 	}
 	return out
 }
 
 // Resolve maps a global tuner number to its device and tuner index.
 func (p *Pool) Resolve(global int) (TunerRef, bool) {
-	ts := p.Tuners()
-	if global < 0 || global >= len(ts) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if global < 0 || global >= len(p.number) {
 		return TunerRef{}, false
 	}
-	return ts[global], true
+	k := p.number[global]
+	return TunerRef{Global: global, DeviceID: k.dev, Index: k.idx, Device: p.devices[k.dev]}, true
 }
 
 // TunerCount is the number of usable physical tuners currently online.
@@ -375,11 +444,9 @@ func (p *Pool) TunerCount() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	n := 0
-	for _, d := range p.devices {
-		for i := 0; i < d.TunerCount; i++ {
-			if !p.exclude[tkey{d.ID, i}] {
-				n++
-			}
+	for _, k := range p.number {
+		if p.devices[k.dev] != nil {
+			n++
 		}
 	}
 	return n
@@ -389,33 +456,32 @@ func (p *Pool) TunerCount() int {
 func (p *Pool) TotalTuners() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	n := 0
-	for _, o := range p.order {
-		n += o.Tuners
-	}
-	return n
+	return len(p.number)
 }
 
-// Devices returns a snapshot of the online devices in global order.
+// Devices returns a snapshot of the online devices that have tuners in use,
+// in global order.
 func (p *Pool) Devices() []*Device {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	var out []*Device
-	for _, o := range p.order {
-		id, _ := hdhrproto.ParseDeviceID(o.ID)
-		if d := p.devices[id]; d != nil {
+	seen := map[uint32]bool{}
+	for _, k := range p.number {
+		if d := p.devices[k.dev]; d != nil && !seen[k.dev] {
+			seen[k.dev] = true
 			out = append(out, d)
 		}
 	}
 	return out
 }
 
-// GlobalOf returns the global number of a device's tuner.
+// GlobalOf returns the global number of a device's tuner, or -1 if the pool
+// does not use it.
 func (p *Pool) GlobalOf(id uint32, idx int) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if o := p.offset(id); o >= 0 {
-		return o + idx
+	if g, ok := p.global[tkey{id, idx}]; ok {
+		return g
 	}
 	return -1
 }
@@ -459,35 +525,29 @@ func (p *Pool) rank(req Request) []tkey {
 	}
 	var cs []cand
 	now := time.Now()
-	for _, o := range p.order {
-		id, _ := hdhrproto.ParseDeviceID(o.ID)
-		d := p.devices[id]
-		if d == nil {
+	for g, k := range p.number {
+		if p.devices[k.dev] == nil {
 			continue
 		}
-		base := p.offset(id)
-		for i := 0; i < d.TunerCount; i++ {
-			k := tkey{id, i}
-			if req.Tuner >= 0 && base+i != req.Tuner {
-				continue
-			}
-			if p.busy[k] || p.exclude[k] || req.Skip[k.String()] || (req.Tuner < 0 && now.Before(p.avoid[k])) {
-				continue
-			}
-			c := p.caps[k]
-			cl := 0
-			if req.Service {
-				if c == capNo {
-					continue
-				}
-				if c == capUnknown {
-					cl = 1
-				}
-			} else {
-				cl = int(c) + 1 // no=0, unknown=1, yes=2
-			}
-			cs = append(cs, cand{k, cl, load[id], base + i})
+		if req.Tuner >= 0 && g != req.Tuner {
+			continue
 		}
+		if p.busy[k] || req.Skip[k.String()] || (req.Tuner < 0 && now.Before(p.avoid[k])) {
+			continue
+		}
+		c := p.caps[k]
+		cl := 0
+		if req.Service {
+			if c == capNo {
+				continue
+			}
+			if c == capUnknown {
+				cl = 1
+			}
+		} else {
+			cl = int(c) + 1 // no=0, unknown=1, yes=2
+		}
+		cs = append(cs, cand{k, cl, load[k.dev], g})
 	}
 	sort.Slice(cs, func(i, j int) bool {
 		a, b := cs[i], cs[j]
@@ -510,10 +570,11 @@ func (p *Pool) rank(req Request) []tkey {
 func (p *Pool) compatible(k tkey, req Request) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.exclude[k] || req.Skip[k.String()] {
+	g, ok := p.global[k]
+	if !ok || req.Skip[k.String()] {
 		return false
 	}
-	if req.Tuner >= 0 && p.offset(k.dev)+k.idx != req.Tuner {
+	if req.Tuner >= 0 && g != req.Tuner {
 		return false
 	}
 	return !(req.Service && p.caps[k] == capNo)
@@ -531,7 +592,7 @@ func (p *Pool) pinnedProblem(req Request) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	k := tkey{ref.DeviceID, ref.Index}
-	if p.exclude[k] || p.scan[k] {
+	if p.scan[k] {
 		return ErrTunerBusy // a scan has it: do not wait for the scan to end
 	}
 	if req.Service && p.caps[k] == capNo {
@@ -699,9 +760,6 @@ func (p *Pool) Suitability(global int, service bool) (class int, ok bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	k := tkey{ref.DeviceID, ref.Index}
-	if p.exclude[k] {
-		return 0, false
-	}
 	c := p.caps[k]
 	if service {
 		switch c {

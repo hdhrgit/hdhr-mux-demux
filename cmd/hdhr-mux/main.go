@@ -51,6 +51,7 @@ func main() {
 		DiscoverTargets: cfg.Upstream.DiscoverTarget,
 		Devices:         cfg.Upstream.Devices,
 		AllowIDs:        cfg.Upstream.Allow,
+		Tuners:          cfg.Upstream.Tuners,
 		ExcludeTuners:   cfg.Upstream.Exclude,
 		IgnoreIDs:       []uint32{id},
 		Mode:            cfg.Upstream.Mode,
@@ -117,6 +118,7 @@ func main() {
 		StreamAddr:    cfg.StreamListen,
 		AdvertiseHost: cfg.AdvertiseHost,
 		SSDP:          *cfg.SSDP,
+		Hidden:        !*cfg.Discoverable,
 		LogRequests:   cfg.LogRequests,
 		IdleRelease:   time.Duration(cfg.IdleRelease),
 	}, h, lu)

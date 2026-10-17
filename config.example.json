@@ -1,5 +1,6 @@
 {
   "device_id": "auto",
+  "discoverable": true,
   "friendly_name": "HDHomeRun Mux",
   "virtual_tuners": 0,
   "http_listen": ":80",
@@ -11,6 +12,7 @@
     "discover": true,
     "devices": [],
     "allow": [],
+    "tuners": [],
     "exclude": [],
     "mode": "http"
   },

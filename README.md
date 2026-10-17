@@ -151,9 +151,30 @@ See [config.example.json](config.example.json). Notable keys:
 * `upstream.devices` / `allow` / `exclude` – static addresses, an allow list of
   device IDs, and tuners (`DEVICEID/N`) never to touch. Devices shared with
   other applications are fine; busy tuners are skipped.
+* `upstream.tuners` – the tuners to use, as `DEVICEID`, `DEVICEID/N` or
+  `DEVICEID/N-M`. Only these are used **and numbered** (from 0, in device order), so the
+  virtual device has exactly that many tuners.
+* `upstream.discover: false` – no broadcast discovery; use only `upstream.devices`.
+* `discoverable: false` – hide the multiplexer: it ignores wildcard UDP discovery and
+  does not announce over SSDP. It still answers requests naming its device ID and direct
+  connections, so add it to a client by address.
 * `upstream.mode` – `http` (default) or `rtp`/`udp` (device pushes to this
   host; needs inbound UDP).
 * `linger` (5 s, `-1s` to disable), `client_buffer_mb` (16), `idle_release`.
+
+### Environment variables
+
+These override the file and use the same names as the `hdhomerunsignal` tool where the
+meaning is the same:
+
+| Variable | Effect |
+|---|---|
+| `HDHOMERUN_DEVICES` | comma-separated IPs/hostnames of devices, added to `upstream.devices` |
+| `HDHOMERUN_DISABLE_DISCOVERY=true` | no auto-discovery; only the listed devices |
+| `HDHOMERUN_TUNERS` | comma-separated tuners to use (`DEVICEID`, `DEVICEID/N`, `DEVICEID/N-M`); replaces `upstream.tuners` |
+| `HDHOMERUN_DISCOVERABLE=false` | do not let clients discover the multiplexer |
+
+Changing the tuner list renumbers the virtual tuners.
 
 ## Tools
 
