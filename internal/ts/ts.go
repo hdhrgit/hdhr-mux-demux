@@ -160,17 +160,25 @@ func ParsePIDSet(v string) (PIDSet, error) {
 func CRC32MPEG(b []byte) uint32 {
 	crc := uint32(0xFFFFFFFF)
 	for _, x := range b {
-		crc ^= uint32(x) << 24
-		for i := 0; i < 8; i++ {
+		crc = crc<<8 ^ crcTable[byte(crc>>24)^x]
+	}
+	return crc
+}
+
+var crcTable = func() (t [256]uint32) {
+	for i := range t {
+		crc := uint32(i) << 24
+		for j := 0; j < 8; j++ {
 			if crc&0x80000000 != 0 {
 				crc = crc<<1 ^ 0x04C11DB7
 			} else {
 				crc <<= 1
 			}
 		}
+		t[i] = crc
 	}
-	return crc
-}
+	return
+}()
 
 // SectionReader reassembles PSI sections delivered on a single PID.
 type SectionReader struct {
@@ -222,11 +230,10 @@ func (r *SectionReader) drain(out [][]byte) [][]byte {
 		if len(r.buf) < n {
 			return out
 		}
-		sec := append([]byte(nil), r.buf[:n]...)
-		r.buf = r.buf[n:]
-		if CRC32MPEG(sec) == 0 {
-			out = append(out, sec)
+		if CRC32MPEG(r.buf[:n]) == 0 {
+			out = append(out, append([]byte(nil), r.buf[:n]...))
 		}
+		r.buf = r.buf[n:]
 	}
 	return out
 }

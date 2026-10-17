@@ -635,6 +635,7 @@ func pump(ctx context.Context, w http.ResponseWriter, rc *http.ResponseControlle
 			return
 		case b := <-sub.C:
 			buf = append(buf, b...)
+			sub.Recycle(b)
 			if len(buf) >= maxChunk && !flush() {
 				return
 			}

@@ -72,6 +72,7 @@ type stream struct {
 	programs map[uint16]uint16 // program -> PMT PID
 	pmts     map[uint16]*ts.PMT
 	sections map[uint16]*ts.SectionReader // reader goroutine only
+	lastSec  map[uint16][]byte            // last PAT/PMT section seen per PID, to skip repeats (reader goroutine only)
 	isPSI    [ts.PIDMax + 1]bool          // reader goroutine only
 	// PIDs of the guide tables, written by the reader goroutine under fmu
 	guidePIDs ts.PIDSet
@@ -98,7 +99,7 @@ func newStream(h *Hub, spec chanmap.Spec, base, key string, service bool, progra
 		broken: make(chan struct{}, 1), maskKick: make(chan struct{}, 1),
 		ready: make(chan struct{}), stop: make(chan struct{}),
 		programs: map[uint16]uint16{}, pmts: map[uint16]*ts.PMT{},
-		sections: map[uint16]*ts.SectionReader{},
+		sections: map[uint16]*ts.SectionReader{}, lastSec: map[uint16][]byte{},
 	}
 	empty := []*Sub{}
 	st.subs.Store(&empty)
@@ -296,6 +297,10 @@ func (st *stream) handlePSI(pid uint16, p []byte) {
 		if sec[5]&1 == 0 { // not yet applicable
 			continue
 		}
+		if bytes.Equal(st.lastSec[pid], sec) {
+			continue // a repeat of what was already processed
+		}
+		st.lastSec[pid] = sec
 		if pid == ts.PIDPAT {
 			if pat, err := ts.ParsePAT(sec); err == nil {
 				st.updatePAT(pat)
@@ -317,6 +322,11 @@ func (st *stream) updatePAT(pat *ts.PAT) {
 	}
 	if same {
 		return
+	}
+	for pid := range st.lastSec { // PMTs seen before this PAT may have been ignored
+		if pid != ts.PIDPAT {
+			delete(st.lastSec, pid)
+		}
 	}
 	for _, pid := range st.programs {
 		st.isPSI[pid] = false

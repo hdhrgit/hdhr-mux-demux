@@ -526,8 +526,13 @@ func (s *Sub) flush() {
 	if len(s.pending) == 0 {
 		return
 	}
-	b := make([]byte, len(s.pending))
-	copy(b, s.pending)
+	var b []byte
+	select {
+	case b = <-freeBatches:
+	default:
+		b = make([]byte, 0, 7*ts.PacketSize)
+	}
+	b = append(b, s.pending...)
 	s.pending = s.pending[:0]
 	select {
 	case s.C <- b:
@@ -535,8 +540,27 @@ func (s *Sub) flush() {
 		s.packets.Add(uint64(len(b) / ts.PacketSize))
 	default:
 		s.drops.Add(1)
+		recycle(b)
 	}
 }
+
+// freeBatches holds spare batch buffers, so that delivering a stream does not
+// allocate for every few packets.
+var freeBatches = make(chan []byte, 1024)
+
+func recycle(b []byte) {
+	if cap(b) < 7*ts.PacketSize {
+		return
+	}
+	select {
+	case freeBatches <- b[:0]:
+	default:
+	}
+}
+
+// Recycle hands a batch received from C back for reuse. The caller must not
+// touch it afterwards.
+func (s *Sub) Recycle(b []byte) { recycle(b) }
 
 // Key identifies the shared stream the subscription is attached to.
 func (s *Sub) Key() string { return s.st.key }
