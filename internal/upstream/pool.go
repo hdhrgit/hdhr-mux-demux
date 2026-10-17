@@ -1,0 +1,690 @@
+// Package upstream talks to the physical HDHomeRun devices: discovery,
+// a stable global numbering of all their tuners, tuner allocation that
+// understands ATSC 3.0 capability, and transport stream reception over HTTP
+// (default) or UDP/RTP.
+package upstream
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"net"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"hdhrmux/internal/hdhrproto"
+)
+
+// Config selects which physical devices the pool manages.
+type Config struct {
+	// Discover enables broadcast discovery on the local network.
+	Discover bool
+	// DiscoverTargets are UDP discovery destinations (default
+	// 255.255.255.255:65001).
+	DiscoverTargets []string
+	// Devices are static device addresses ("host" or "host:port"); they are
+	// probed with unicast discovery.
+	Devices []string
+	// AllowIDs restricts the pool to these device IDs (hex). Empty = all.
+	AllowIDs []string
+	// ExcludeTuners lists tuners the pool must never use, "DEVICEID/N".
+	ExcludeTuners []string
+	// IgnoreIDs are never used (the multiplexer's own device ID).
+	IgnoreIDs []uint32
+	// Mode is how transport streams are pulled from a device: "http"
+	// (default; works through Docker NAT) or "rtp"/"udp" (the device pushes
+	// to a local UDP port).
+	Mode string
+	// StreamPort is the device's HTTP streaming port (default 5004).
+	StreamPort int
+	// LocalIP overrides the address devices are told to stream to (rtp/udp).
+	LocalIP string
+	// OrderFile persists the device order so tuner numbers stay stable.
+	OrderFile string
+	// RefreshInterval between discovery passes (default 30s).
+	RefreshInterval time.Duration
+	// WaitFree is how long Open waits for a tuner to become free.
+	WaitFree time.Duration
+	// TuneTimeout bounds how long a device may take to start a stream
+	// (a channel without signal takes about 10 s to be rejected).
+	TuneTimeout time.Duration
+}
+
+var (
+	ErrNoTuner = errors.New("no physical tuner available")
+	// ErrTunerBusy: the pinned physical tuner is in use (typically by another
+	// application sharing the device).
+	ErrTunerBusy = errors.New("physical tuner in use")
+	// ErrTunerUnsuitable: the pinned tuner cannot tune this channel (an
+	// ATSC 1.0-only tuner asked for ATSC 3.0).
+	ErrTunerUnsuitable = errors.New("physical tuner cannot tune this channel")
+	// ErrNoSignal: the device could not deliver video on the channel.
+	ErrNoSignal = errors.New("no signal")
+	// ErrNeedsProgram: the channel (ATSC 3.0) cannot be streamed without
+	// selecting a service.
+	ErrNeedsProgram = errors.New("channel requires a program")
+)
+
+type Device struct {
+	ID         uint32
+	IP         net.IP
+	Port       int // control port
+	StreamPort int
+	TunerCount int
+	Model      string // /sys/model, e.g. hdhomerun5_atsc3
+	ctl        *hdhrproto.Control
+}
+
+func (d *Device) Addr() string { return net.JoinHostPort(d.IP.String(), strconv.Itoa(d.Port)) }
+func (d *Device) StreamAddr() string {
+	return net.JoinHostPort(d.IP.String(), strconv.Itoa(d.StreamPort))
+}
+
+type tkey struct {
+	dev uint32
+	idx int
+}
+
+func (k tkey) String() string { return fmt.Sprintf("%08X/%d", k.dev, k.idx) }
+
+// capability of a tuner to lock ATSC 3.0.
+type capability int8
+
+const (
+	capNo      capability = -1
+	capUnknown capability = 0
+	capYes     capability = 1
+)
+
+type orderEntry struct {
+	ID     string `json:"id"`
+	Tuners int    `json:"tuners"`
+}
+
+type Pool struct {
+	cfg Config
+
+	mu      sync.Mutex
+	devices map[uint32]*Device
+	order   []orderEntry
+	busy    map[tkey]bool
+	avoid   map[tkey]time.Time // temporarily skipped
+	caps    map[tkey]capability
+	changed chan struct{} // closed & replaced whenever availability may have changed
+	allow   map[uint32]bool
+	exclude map[tkey]bool
+	ignore  map[uint32]bool
+
+	// Reclaim, if set, is asked to free a physical tuner held for no one
+	// (a lingering stream) when all are taken. accept reports whether a given
+	// tuner would satisfy the waiting request. It returns whether it freed one.
+	Reclaim func(accept func(*Lease) bool) bool
+}
+
+func NewPool(cfg Config) (*Pool, error) {
+	if cfg.Mode == "" {
+		cfg.Mode = "http"
+	}
+	switch cfg.Mode {
+	case "http", "rtp", "udp":
+	default:
+		return nil, fmt.Errorf("upstream mode must be http, rtp or udp, got %q", cfg.Mode)
+	}
+	if cfg.StreamPort == 0 {
+		cfg.StreamPort = 5004
+	}
+	if cfg.RefreshInterval == 0 {
+		cfg.RefreshInterval = 30 * time.Second
+	}
+	if cfg.TuneTimeout == 0 {
+		cfg.TuneTimeout = 15 * time.Second
+	}
+	if len(cfg.DiscoverTargets) == 0 {
+		cfg.DiscoverTargets = []string{"255.255.255.255:65001"}
+	}
+	p := &Pool{
+		cfg: cfg, devices: map[uint32]*Device{}, busy: map[tkey]bool{}, avoid: map[tkey]time.Time{},
+		caps: map[tkey]capability{}, changed: make(chan struct{}),
+		allow: map[uint32]bool{}, exclude: map[tkey]bool{}, ignore: map[uint32]bool{},
+	}
+	for _, s := range cfg.AllowIDs {
+		id, err := hdhrproto.ParseDeviceID(strings.ToUpper(s))
+		if err != nil {
+			return nil, err
+		}
+		p.allow[id] = true
+	}
+	for _, s := range cfg.ExcludeTuners {
+		dev, idx, ok := strings.Cut(s, "/")
+		id, err := hdhrproto.ParseDeviceID(strings.ToUpper(dev))
+		n, err2 := strconv.Atoi(idx)
+		if !ok || err != nil || err2 != nil {
+			return nil, fmt.Errorf("bad exclude_tuners entry %q (want DEVICEID/N)", s)
+		}
+		p.exclude[tkey{id, n}] = true
+	}
+	for _, id := range cfg.IgnoreIDs {
+		p.ignore[id] = true
+	}
+	if cfg.OrderFile != "" {
+		if b, err := os.ReadFile(cfg.OrderFile); err == nil {
+			if err := json.Unmarshal(b, &p.order); err != nil {
+				return nil, fmt.Errorf("%s: %w", cfg.OrderFile, err)
+			}
+		}
+	}
+	return p, nil
+}
+
+func (p *Pool) saveOrderLocked() {
+	if p.cfg.OrderFile == "" {
+		return
+	}
+	b, _ := json.MarshalIndent(p.order, "", "  ")
+	if err := os.MkdirAll(filepath.Dir(p.cfg.OrderFile), 0o755); err == nil {
+		os.WriteFile(p.cfg.OrderFile, b, 0o644)
+	}
+}
+
+// SetStreamPort overrides the HTTP streaming port of one device.
+func (p *Pool) SetStreamPort(id uint32, port int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if d := p.devices[id]; d != nil {
+		d.StreamPort = port
+	}
+}
+
+// Refresh runs one discovery pass and merges the results into the inventory.
+func (p *Pool) Refresh() {
+	var targets []string
+	if p.cfg.Discover {
+		targets = append(targets, p.cfg.DiscoverTargets...)
+	}
+	for _, d := range p.cfg.Devices {
+		if _, _, err := net.SplitHostPort(d); err != nil {
+			d = net.JoinHostPort(d, strconv.Itoa(hdhrproto.ControlPort))
+		}
+		targets = append(targets, d)
+	}
+	if len(targets) == 0 {
+		return
+	}
+	infos, err := hdhrproto.Discover(targets, 800*time.Millisecond)
+	if err != nil {
+		log.Printf("upstream: discovery: %v", err)
+		return
+	}
+	// Stable numbering for devices seen together for the first time: by ID.
+	sort.Slice(infos, func(i, j int) bool { return infos[i].DeviceID < infos[j].DeviceID })
+	for _, inf := range infos {
+		if inf.DeviceType != hdhrproto.DeviceTypeTuner || inf.TunerCount == 0 || p.ignore[inf.DeviceID] {
+			continue
+		}
+		if len(p.allow) > 0 && !p.allow[inf.DeviceID] {
+			continue
+		}
+		p.mu.Lock()
+		old, known := p.devices[inf.DeviceID]
+		p.mu.Unlock()
+		if known && old.IP.Equal(inf.IP) && old.Port == inf.Port {
+			continue
+		}
+		d := &Device{ID: inf.DeviceID, IP: inf.IP, Port: inf.Port, StreamPort: p.cfg.StreamPort, TunerCount: inf.TunerCount}
+		d.ctl = hdhrproto.NewControl(d.Addr())
+		d.Model, _ = d.ctl.Get("/sys/model")
+
+		p.mu.Lock()
+		if known {
+			old.ctl.Close()
+			d.StreamPort = old.StreamPort
+		}
+		p.devices[d.ID] = d
+		p.registerLocked(d)
+		p.notifyLocked()
+		first := p.offset(d.ID)
+		p.mu.Unlock()
+		log.Printf("upstream: device %s (%s) at %s with %d tuner(s), tuners %d-%d",
+			hdhrproto.FormatDeviceID(d.ID), d.Model, d.Addr(), d.TunerCount, first, first+d.TunerCount-1)
+	}
+}
+
+// registerLocked records the device in the persistent order and seeds the
+// ATSC 3.0 capability table from its model.
+func (p *Pool) registerLocked(d *Device) {
+	id := hdhrproto.FormatDeviceID(d.ID)
+	found := false
+	for i := range p.order {
+		if p.order[i].ID == id {
+			found = true
+			if p.order[i].Tuners != d.TunerCount {
+				p.order[i].Tuners = d.TunerCount
+				p.saveOrderLocked()
+			}
+		}
+	}
+	if !found {
+		p.order = append(p.order, orderEntry{id, d.TunerCount})
+		p.saveOrderLocked()
+	}
+	for i := 0; i < d.TunerCount; i++ {
+		k := tkey{d.ID, i}
+		switch {
+		case !strings.Contains(d.Model, "atsc3"):
+			p.caps[k] = capNo
+		case i < 2:
+			// Observed on HDHR5-4K / HDFX-4K: tuners 0 and 1 lock ATSC 3.0,
+			// the others are ATSC 1.0 only. Others stay "unknown" and are
+			// learned from the device's answers.
+			p.caps[k] = capYes
+		default:
+			p.caps[k] = capUnknown
+		}
+	}
+}
+
+// offset is the global number of a device's first tuner.
+func (p *Pool) offset(id uint32) int {
+	want := hdhrproto.FormatDeviceID(id)
+	n := 0
+	for _, o := range p.order {
+		if o.ID == want {
+			return n
+		}
+		n += o.Tuners
+	}
+	return -1
+}
+
+// Run keeps the inventory fresh until ctx is cancelled.
+func (p *Pool) Run(ctx context.Context) {
+	t := time.NewTicker(p.cfg.RefreshInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			p.Refresh()
+		}
+	}
+}
+
+// TunerRef identifies one tuner in the global numbering.
+type TunerRef struct {
+	Global   int
+	DeviceID uint32
+	Index    int
+	Device   *Device // nil while the device is offline
+}
+
+// Tuners lists every tuner of every known device (including offline devices
+// remembered from earlier runs) in the stable global order.
+func (p *Pool) Tuners() []TunerRef {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []TunerRef
+	for _, o := range p.order {
+		id, _ := hdhrproto.ParseDeviceID(o.ID)
+		d := p.devices[id]
+		for i := 0; i < o.Tuners; i++ {
+			out = append(out, TunerRef{Global: len(out), DeviceID: id, Index: i, Device: d})
+		}
+	}
+	return out
+}
+
+// Resolve maps a global tuner number to its device and tuner index.
+func (p *Pool) Resolve(global int) (TunerRef, bool) {
+	ts := p.Tuners()
+	if global < 0 || global >= len(ts) {
+		return TunerRef{}, false
+	}
+	return ts[global], true
+}
+
+// TunerCount is the number of usable physical tuners currently online.
+func (p *Pool) TunerCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := 0
+	for _, d := range p.devices {
+		for i := 0; i < d.TunerCount; i++ {
+			if !p.exclude[tkey{d.ID, i}] {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// TotalTuners is the size of the global numbering (online or not).
+func (p *Pool) TotalTuners() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := 0
+	for _, o := range p.order {
+		n += o.Tuners
+	}
+	return n
+}
+
+// Devices returns a snapshot of the online devices in global order.
+func (p *Pool) Devices() []*Device {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []*Device
+	for _, o := range p.order {
+		id, _ := hdhrproto.ParseDeviceID(o.ID)
+		if d := p.devices[id]; d != nil {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// GlobalOf returns the global number of a device's tuner.
+func (p *Pool) GlobalOf(id uint32, idx int) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if o := p.offset(id); o >= 0 {
+		return o + idx
+	}
+	return -1
+}
+
+func (p *Pool) notifyLocked() {
+	close(p.changed)
+	p.changed = make(chan struct{})
+}
+
+// Request describes what a stream needs from a physical tuner.
+type Request struct {
+	Frequency uint64
+	// Program selects one service on the device itself (ATSC 3.0); 0 asks for
+	// the whole multiplex.
+	Program uint16
+	// Service marks an ATSC 3.0 channel: only capable tuners qualify.
+	Service bool
+	// Tuner pins the stream to one physical tuner by its global number
+	// (virtual tuner N is physical tuner N); -1 lets the pool choose.
+	Tuner int
+	// Skip lists tuners ("DEVICEID/N") not to use.
+	Skip map[string]bool
+}
+
+// rank returns the free tuners that qualify for req, best first. ATSC 1.0
+// requests go to tuners that cannot do ATSC 3.0 before touching the ones that
+// can, so those stay free for ATSC 3.0; ATSC 3.0 requests go to proven-capable
+// tuners before unproven ones. Ties go to the less loaded device.
+func (p *Pool) rank(req Request) []tkey {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	load := map[uint32]int{}
+	for k := range p.busy {
+		load[k.dev]++
+	}
+	type cand struct {
+		k      tkey
+		class  int
+		load   int
+		global int
+	}
+	var cs []cand
+	now := time.Now()
+	for _, o := range p.order {
+		id, _ := hdhrproto.ParseDeviceID(o.ID)
+		d := p.devices[id]
+		if d == nil {
+			continue
+		}
+		base := p.offset(id)
+		for i := 0; i < d.TunerCount; i++ {
+			k := tkey{id, i}
+			if req.Tuner >= 0 && base+i != req.Tuner {
+				continue
+			}
+			if p.busy[k] || p.exclude[k] || req.Skip[k.String()] || (req.Tuner < 0 && now.Before(p.avoid[k])) {
+				continue
+			}
+			c := p.caps[k]
+			cl := 0
+			if req.Service {
+				if c == capNo {
+					continue
+				}
+				if c == capUnknown {
+					cl = 1
+				}
+			} else {
+				cl = int(c) + 1 // no=0, unknown=1, yes=2
+			}
+			cs = append(cs, cand{k, cl, load[id], base + i})
+		}
+	}
+	sort.Slice(cs, func(i, j int) bool {
+		a, b := cs[i], cs[j]
+		if a.class != b.class {
+			return a.class < b.class
+		}
+		if a.load != b.load {
+			return a.load < b.load
+		}
+		return a.global < b.global
+	})
+	out := make([]tkey, len(cs))
+	for i, c := range cs {
+		out[i] = c.k
+	}
+	return out
+}
+
+// compatible reports whether freeing tuner k would let req proceed.
+func (p *Pool) compatible(k tkey, req Request) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.exclude[k] || req.Skip[k.String()] {
+		return false
+	}
+	if req.Tuner >= 0 && p.offset(k.dev)+k.idx != req.Tuner {
+		return false
+	}
+	return !(req.Service && p.caps[k] == capNo)
+}
+
+// pinnedProblem says up front whether the pinned tuner can ever serve req.
+func (p *Pool) pinnedProblem(req Request) error {
+	if req.Tuner < 0 {
+		return nil
+	}
+	ref, ok := p.Resolve(req.Tuner)
+	if !ok || ref.Device == nil {
+		return ErrTunerBusy // offline or nonexistent: unusable right now
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	k := tkey{ref.DeviceID, ref.Index}
+	if p.exclude[k] {
+		return ErrTunerBusy
+	}
+	if req.Service && p.caps[k] == capNo {
+		return ErrTunerUnsuitable
+	}
+	return nil
+}
+
+func (p *Pool) setCap(k tkey, c capability) {
+	p.mu.Lock()
+	p.caps[k] = c
+	p.mu.Unlock()
+}
+
+func (p *Pool) markBusy(k tkey) (*Device, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.busy[k] {
+		return nil, false
+	}
+	p.busy[k] = true
+	return p.devices[k.dev], true
+}
+
+func (p *Pool) unbusy(k tkey, avoidFor time.Duration) {
+	p.mu.Lock()
+	delete(p.busy, k)
+	if avoidFor > 0 {
+		p.avoid[k] = time.Now().Add(avoidFor)
+	}
+	p.notifyLocked()
+	p.mu.Unlock()
+}
+
+// strictWait bounds how long a pinned request waits for its tuner: a
+// tuner that is not ours to free (another application, or a device that has
+// not yet noticed a closed stream) should not stall the caller for long.
+const strictWait = 1500 * time.Millisecond
+
+// Open takes a physical tuner, tunes it as req describes and begins
+// delivering the transport stream. A pinned request (req.Tuner >= 0) uses
+// exactly that tuner and fails with ErrTunerBusy / ErrTunerUnsuitable;
+// otherwise it waits up to WaitFree for any suitable tuner.
+func (p *Pool) Open(ctx context.Context, req Request) (*Lease, error) {
+	strict := req.Tuner >= 0
+	if err := p.pinnedProblem(req); err != nil {
+		return nil, err
+	}
+	wait := p.cfg.WaitFree
+	if strict && wait > strictWait {
+		wait = strictWait
+	}
+	deadline := time.Now().Add(wait)
+	var lastErr error
+	for {
+		p.mu.Lock()
+		wake := p.changed
+		p.mu.Unlock()
+		for _, k := range p.rank(req) {
+			dev, ok := p.markBusy(k)
+			if !ok || dev == nil {
+				continue
+			}
+			l, err := p.start(ctx, dev, k.idx, req)
+			if err == nil {
+				return l, nil
+			}
+			switch {
+			case errors.Is(err, ErrNoSignal), errors.Is(err, ErrNeedsProgram), ctx.Err() != nil:
+				p.unbusy(k, 0)
+				return nil, err
+			case errors.Is(err, errTuneFailed):
+				if req.Service {
+					p.setCap(k, capNo)
+					log.Printf("upstream: tuner %s cannot lock ATSC 3.0", k)
+				}
+				p.unbusy(k, 5*time.Second)
+				if strict {
+					return nil, ErrTunerUnsuitable
+				}
+			case errors.Is(err, errInUse):
+				if strict {
+					p.unbusy(k, 0)
+				} else {
+					p.unbusy(k, time.Second)
+				}
+			default:
+				log.Printf("upstream: tuner %s: %v", k, err)
+				p.unbusy(k, 5*time.Second)
+			}
+			lastErr = err
+		}
+		// Nothing free: ask for a lingering stream to be given up.
+		if p.Reclaim != nil && p.Reclaim(func(l *Lease) bool { return p.compatible(tkey{l.dev.ID, l.idx}, req) }) {
+			continue
+		}
+		left := time.Until(deadline)
+		if left <= 0 {
+			if strict {
+				return nil, ErrTunerBusy
+			}
+			if lastErr != nil && !errors.Is(lastErr, errInUse) {
+				return nil, fmt.Errorf("%w (last error: %v)", ErrNoTuner, lastErr)
+			}
+			return nil, ErrNoTuner
+		}
+		if left > 300*time.Millisecond {
+			left = 300 * time.Millisecond
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-wake:
+		case <-time.After(left):
+		}
+	}
+}
+
+// HeldByUs reports whether the pool itself is using the tuner.
+func (p *Pool) HeldByUs(deviceID uint32, idx int) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.busy[tkey{deviceID, idx}]
+}
+
+// RawStatus returns the status line of a physical tuner exactly as the
+// device reports it.
+func (p *Pool) RawStatus(deviceID uint32, idx int) (string, error) {
+	p.mu.Lock()
+	d := p.devices[deviceID]
+	p.mu.Unlock()
+	if d == nil {
+		return "", errors.New("device offline")
+	}
+	return d.ctl.Get(fmt.Sprintf("/tuner%d/status", idx))
+}
+
+// Suitability says how good physical tuner global is for a new stream, lower
+// being better; ok is false when it cannot serve the kind of stream at all.
+// ATSC 1.0 streams prefer tuners that cannot do ATSC 3.0 (keeping the capable
+// ones free); ATSC 3.0 streams prefer tuners proven capable.
+func (p *Pool) Suitability(global int, service bool) (class int, ok bool) {
+	ref, found := p.Resolve(global)
+	if !found || ref.Device == nil {
+		return 0, false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	k := tkey{ref.DeviceID, ref.Index}
+	if p.exclude[k] {
+		return 0, false
+	}
+	c := p.caps[k]
+	if service {
+		switch c {
+		case capYes:
+			return 0, true
+		case capUnknown:
+			return 1, true
+		}
+		return 0, false
+	}
+	return int(c) + 1, true
+}
+
+// RawGet reads any control variable of a physical tuner as the device
+// reports it.
+func (p *Pool) RawGet(deviceID uint32, idx int, name string) (string, error) {
+	p.mu.Lock()
+	d := p.devices[deviceID]
+	p.mu.Unlock()
+	if d == nil {
+		return "", errors.New("device offline")
+	}
+	return d.ctl.Get(fmt.Sprintf("/tuner%d/%s", idx, name))
+}

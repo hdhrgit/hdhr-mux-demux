@@ -1,0 +1,27 @@
+{
+  "device_id": "auto",
+  "friendly_name": "HDHomeRun Mux",
+  "virtual_tuners": 0,
+  "http_listen": ":80",
+  "stream_listen": ":5004",
+  "control_listen": ":65001",
+  "state_dir": "/var/lib/hdhr-mux",
+
+  "upstream": {
+    "discover": true,
+    "devices": [],
+    "allow": [],
+    "exclude": [],
+    "mode": "http"
+  },
+
+  "lineup": {
+    "channel_map": "us-bcast",
+    "default_source": "Antenna",
+    "scan_on_start": true
+  },
+
+  "linger": "5s",
+  "client_buffer_mb": 16,
+  "idle_release": "60s"
+}
