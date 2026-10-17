@@ -270,7 +270,13 @@ func openHTTP(ctx context.Context, addr, path string, timeout time.Duration) (*h
 	return &httpSource{conn: conn, br: br}, nil
 }
 
+// readCoalesce is how long the reader lets data pile up in the socket before
+// each read. A device sends in segments of about a kilobyte; waking up for every
+// one of them cost more CPU than everything else in the data path.
+const readCoalesce = 4 * time.Millisecond
+
 func (s *httpSource) Read(buf []byte, deadline time.Time) ([]byte, error) {
+	time.Sleep(readCoalesce)
 	s.conn.SetReadDeadline(deadline)
 	n, err := s.br.Read(buf)
 	if n > 0 {
