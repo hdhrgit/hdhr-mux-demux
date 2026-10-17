@@ -182,9 +182,11 @@ func (d *Device) epgData(r *http.Request) []epgChannel {
 		}
 		c := epgChannel{GuideNumber: e.GuideNumber, GuideName: e.GuideName}
 		if s != nil {
-			for _, ev := range s.Events(e.GuideNumber) {
+			all := s.Events(e.GuideNumber)
+			langs := psip.EventLanguages(all) // the broadcast's own labels are unreliable
+			for i, ev := range all {
 				if ev.End().After(from) && ev.Start.Before(to) {
-					c.Events = append(c.Events, epgEvent{ev.ID, ev.Start, ev.End(), ev.Title, ev.Description, ev.Language})
+					c.Events = append(c.Events, epgEvent{ev.ID, ev.Start, ev.End(), ev.Title, ev.Description, langs[i]})
 				}
 			}
 		}
