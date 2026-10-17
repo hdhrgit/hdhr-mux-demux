@@ -1,6 +1,7 @@
 package fakehdhr
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -18,7 +19,50 @@ var reHTTPCh = regexp.MustCompile(`^ch(\d+)(?:-(\d+))?$`)
 // one is 5004).
 func (d *Device) StreamPort() int { return d.http.Addr().(*net.TCPAddr).Port }
 
+// WebPort is the port of the device's HTTP API (the real one is 80).
+func (d *Device) WebPort() int { return d.web.Addr().(*net.TCPAddr).Port }
+
+// HideFromLineup removes a virtual channel from the device's own lineup and
+// from what it will tune by name (as if its scan had not found it).
+func (d *Device) HideFromLineup(vchannel string) {
+	d.mu.Lock()
+	d.hidden[vchannel] = true
+	d.mu.Unlock()
+}
+
+func (d *Device) serveLineup(w http.ResponseWriter, r *http.Request) {
+	type item struct {
+		GuideNumber string
+		GuideName   string
+		VideoCodec  string
+		AudioCodec  string
+		HD          int
+		URL         string
+	}
+	out := []item{}
+	d.mu.Lock()
+	for _, c := range d.cfg.Channels {
+		for _, p := range c.Programs {
+			if !d.hidden[p.VChannel] {
+				out = append(out, item{p.VChannel, p.Name, "MPEG2", "AC3", 1, fmt.Sprintf("http://127.0.0.1:%d/auto/v%s", d.StreamPort(), p.VChannel)})
+			}
+		}
+	}
+	d.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
 func (d *Device) startHTTP() error {
+	web, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+	d.web = web
+	wm := http.NewServeMux()
+	wm.HandleFunc("GET /lineup.json", d.serveLineup)
+	go http.Serve(web, wm)
+
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		return err
@@ -47,8 +91,27 @@ func hdhrErr(w http.ResponseWriter, code int, hdhr string) {
 func (d *Device) serveHTTPStream(w http.ResponseWriter, r *http.Request) {
 	which, chs := r.PathValue("tuner"), r.PathValue("channel")
 	idx, err := strconv.Atoi(strings.TrimPrefix(which, "tuner"))
+	if err != nil || !strings.HasPrefix(which, "tuner") || idx < 0 || idx >= len(d.tuners) {
+		hdhrErr(w, 404, "")
+		return
+	}
 	m := reHTTPCh.FindStringSubmatch(chs)
-	if err != nil || !strings.HasPrefix(which, "tuner") || idx < 0 || idx >= len(d.tuners) || m == nil {
+	if strings.HasPrefix(chs, "v") { // /tunerN/v<virtual channel>: the device resolves it itself
+		d.mu.Lock()
+		for _, c := range d.cfg.Channels {
+			for _, p := range c.Programs {
+				if p.VChannel == chs[1:] && !d.hidden[p.VChannel] {
+					m = []string{"", strconv.FormatUint(c.Frequency, 10), strconv.Itoa(int(p.Number))}
+				}
+			}
+		}
+		d.mu.Unlock()
+		if m == nil {
+			hdhrErr(w, 404, "801 Unknown Channel")
+			return
+		}
+	}
+	if m == nil {
 		hdhrErr(w, 404, "")
 		return
 	}

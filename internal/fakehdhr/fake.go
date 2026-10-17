@@ -41,15 +41,18 @@ type Config struct {
 	Channels   []Channel
 	Bitrate    int    // bits per second per active tuner (default 4 Mbps)
 	ChannelMap string // default us-bcast
+	Model      string // /sys/model, default hdhomerun5_atsc3
 }
 
 type Device struct {
-	cfg  Config
-	tcp  net.Listener
-	udp  net.PacketConn
-	port int
-	http net.Listener
-	srv  *http.Server
+	cfg    Config
+	tcp    net.Listener
+	udp    net.PacketConn
+	port   int
+	http   net.Listener
+	web    net.Listener
+	hidden map[string]bool
+	srv    *http.Server
 
 	mu       sync.Mutex
 	tuners   []*tuner
@@ -101,7 +104,7 @@ func Start(cfg Config) (*Device, error) {
 			ln.Close()
 			continue
 		}
-		d = &Device{cfg: cfg, tcp: ln, udp: pc, port: port, closed: make(chan struct{})}
+		d = &Device{cfg: cfg, tcp: ln, udp: pc, port: port, closed: make(chan struct{}), hidden: map[string]bool{}}
 		break
 	}
 	if d == nil {
@@ -131,6 +134,7 @@ func (d *Device) Close() {
 	d.tcp.Close()
 	d.udp.Close()
 	d.srv.Close()
+	d.web.Close()
 	d.mu.Lock()
 	for _, t := range d.tuners {
 		d.stopStream(t)
@@ -220,6 +224,9 @@ func (d *Device) GetSet(remote net.IP, name string, value *string, lockkey *uint
 		if len(parts) == 2 && value == nil {
 			switch parts[1] {
 			case "model":
+				if d.cfg.Model != "" {
+					return d.cfg.Model, nil
+				}
 				return "hdhomerun5_atsc3", nil
 			case "hwmodel":
 				return "FAKE-" + strconv.Itoa(d.cfg.Tuners), nil

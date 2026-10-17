@@ -73,7 +73,8 @@ type Lineup struct {
 	DefaultSource string            `json:"default_source"`
 	ScanFrom      int               `json:"scan_from"`
 	ScanTo        int               `json:"scan_to"`
-	ScanOnStart   bool              `json:"scan_on_start"` // when the lineup is empty
+	ScanOnStart   bool              `json:"scan_on_start"` // scan at start-up (off by default: the devices' lineups are used)
+	Refresh       Duration          `json:"refresh"`       // re-read the devices' lineups this often (default 10m, -1s = never)
 	// ScanTuners limits tuners used per device by a scan (0 = every free one).
 	ScanTuners int `json:"scan_tuners_per_device"`
 }

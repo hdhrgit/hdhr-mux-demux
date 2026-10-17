@@ -78,6 +78,7 @@ func setup(t *testing.T, physTuners []int, virtual int, mod func(*vdev.Config)) 
 	}
 	for _, f := range e.fakes {
 		pool.SetStreamPort(f.ID(), f.StreamPort())
+		pool.SetWebPort(f.ID(), f.WebPort())
 	}
 	e.hub = hub.New(pool, hub.Config{Linger: testLinger, ClientBuffer: testBuffer})
 	t.Cleanup(e.hub.Close)
@@ -675,8 +676,15 @@ func TestScan(t *testing.T) {
 	for _, l := range lj {
 		names = append(names, l["GuideNumber"].(string)+"="+l["GuideName"].(string))
 	}
-	if got := strings.Join(names, ","); got != "7.1=ALPHA,7.2=BETA,14.1=GAMMA,14.3=DELTA" {
-		t.Fatalf("scanned lineup %q", got)
+	// The channel list is the devices' (every program they list); the scan
+	// taught where the ones inside its range are.
+	if got := strings.Join(names, ","); got != "7.1=ALPHA,7.2=BETA,14.1=GAMMA,14.3=DELTA,36.1=EPSILON,104.1=NEXT-A,107.1=NEXT-B,114.1=NEXT-C" {
+		t.Fatalf("lineup after scan %q", got)
+	}
+	for g, want := range map[string]uint64{"7.1": 177000000, "7.2": 177000000, "14.1": 473000000, "14.3": 473000000, "36.1": 0, "104.1": 0} {
+		if en, _ := e.lu.Find(g); en.Frequency != want {
+			t.Errorf("%s: frequency %d, want %d", g, en.Frequency, want)
+		}
 	}
 	// scan released its tuner, and the scanned lineup is streamable
 	c, _ := e.open("/auto/v14.3")
@@ -1333,4 +1341,103 @@ func TestScanTunerLimit(t *testing.T) {
 	c.read(t, 188*50)
 	c.close()
 	e.dev.AbortScan()
+}
+
+// The channel list comes from the devices' own lineups; where a channel is on
+// the air is not known until it is learned.
+func TestLineupFromDevices(t *testing.T) {
+	e := setup(t, []int{2}, 2, nil)
+	e.lu.Replace(nil)
+	if err := e.dev.RefreshLineup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var lj []map[string]any
+	getJSON(t, e.api+"/lineup.json", &lj)
+	if len(lj) != 8 {
+		t.Fatalf("%d channels from the devices, want 8: %v", len(lj), lj)
+	}
+	if lj[0]["GuideNumber"] != "7.1" || lj[0]["GuideName"] != "ALPHA" || lj[0]["VideoCodec"] != "MPEG2" || lj[0]["HD"].(float64) != 1 {
+		t.Fatalf("first entry %v", lj[0])
+	}
+	if en, _ := e.lu.Find("7.1"); en.Frequency != 0 {
+		t.Fatalf("nothing should be known about the RF channel yet: %+v", en)
+	}
+	e.lu.LearnRF([]lineup.Entry{{GuideNumber: "7.2", Frequency: 177000000, Program: 2, Modulation: "8vsb"}}, false)
+
+	// a channel the devices stop listing disappears; what was learned stays
+	e.fakes[0].HideFromLineup("14.3")
+	if err := e.dev.RefreshLineup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := e.lu.Find("14.3"); ok {
+		t.Fatal("14.3 should be gone")
+	}
+	if en, _ := e.lu.Find("7.2"); en.Frequency != 177000000 || en.Program != 2 {
+		t.Fatalf("learned RF lost on refresh: %+v", en)
+	}
+}
+
+// A channel of unknown location is found by tuning it by name once; the whole
+// multiplex is learned from that, so its neighbours need no further probe.
+func TestLazyLearning(t *testing.T) {
+	e := setup(t, []int{2}, 2, nil)
+	e.lu.Replace(nil)
+	if err := e.dev.RefreshLineup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	c, resp := e.open("/auto/v14.3")
+	if c == nil {
+		t.Fatalf("unlearned channel refused: %d %v", resp.StatusCode, resp.Header)
+	}
+	defer c.close()
+	an := analyze(t, c.read(t, 188*200))
+	if an.ccErrors != 0 || len(an.esProgs) != 1 || !an.esProgs[3] {
+		t.Fatalf("content: %v cc=%d", an.esProgs, an.ccErrors)
+	}
+	for g, prog := range map[string]uint16{"14.1": 1, "14.3": 3} {
+		if en, _ := e.lu.Find(g); en.Frequency != 473000000 || en.Program != prog {
+			t.Errorf("%s not learned from the probe: %+v", g, en)
+		}
+	}
+	if en, _ := e.lu.Find("7.1"); en.Frequency != 0 {
+		t.Errorf("7.1 is on another multiplex and must still be unknown: %+v", en)
+	}
+	tunes := e.fakes[0].TuneCount()
+	// its neighbour needs no probe, and joins the tuner that already has it
+	c2, _ := e.open("/auto/v14.1")
+	if c2 == nil {
+		t.Fatal("neighbour refused")
+	}
+	defer c2.close()
+	c2.read(t, 188*50)
+	if n := e.fakes[0].TuneCount(); n != tunes {
+		t.Fatalf("the neighbour caused %d extra tunes", n-tunes)
+	}
+	if e.activePhysical() != 1 {
+		t.Fatalf("%d tuners active, want 1", e.activePhysical())
+	}
+	// a channel the devices do not know cannot be located
+	e.lu.LearnRF([]lineup.Entry{{GuideNumber: "55.5", GuideName: "GHOST"}}, true)
+	_, resp = e.open("/auto/v55.5")
+	if resp.StatusCode != 404 || resp.Header.Get("X-HDHomeRun-Error") != "801 Unknown Channel" {
+		t.Fatalf("unknown to every device: %d %v", resp.StatusCode, resp.Header)
+	}
+}
+
+// Watching any channel teaches the lineup where the rest of its multiplex is.
+func TestLearnsFromRunningStream(t *testing.T) {
+	e := setup(t, []int{2}, 2, nil)
+	e.lu.Replace(nil)
+	if err := e.dev.RefreshLineup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	c, resp := e.open("/auto/ch177000000-1") // by frequency: no lineup lookup at all
+	if c == nil {
+		t.Fatalf("refused: %d", resp.StatusCode)
+	}
+	defer c.close()
+	waitFor(t, "7.2 learned from the running stream", 5*time.Second, func() bool {
+		en, _ := e.lu.Find("7.2")
+		return en.Frequency == 177000000 && en.Program == 2
+	})
 }

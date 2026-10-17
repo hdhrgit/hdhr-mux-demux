@@ -19,6 +19,7 @@ import (
 	"hdhrmux/internal/chanmap"
 	"hdhrmux/internal/hdhrproto"
 	"hdhrmux/internal/hub"
+	"hdhrmux/internal/lineup"
 	"hdhrmux/internal/upstream"
 )
 
@@ -342,13 +343,35 @@ type streamReq struct {
 	service  bool // ATSC 3.0: the device delivers one service per tuner
 }
 
-func (d *Device) parseChannelPath(s string) (streamReq, error) {
+// resolve returns the lineup entry for a guide number, learning where the
+// channel is on the air first if that is not known yet.
+func (d *Device) resolve(ctx context.Context, guide string) (lineup.Entry, error) {
+	e, ok := d.lineup.Find(guide)
+	if !ok {
+		return e, fmt.Errorf("%w %q", errUnknownChannel, guide)
+	}
+	if e.Frequency != 0 {
+		return e, nil
+	}
+	if err := d.hub.LearnVChannel(ctx, guide); err != nil {
+		if errors.Is(err, upstream.ErrUnknownChannel) {
+			return e, fmt.Errorf("%w %q", errUnknownChannel, guide)
+		}
+		return e, err
+	}
+	if e, ok = d.lineup.Find(guide); !ok || e.Frequency == 0 {
+		return e, fmt.Errorf("%w: %s did not show up on the multiplex it was found on", upstream.ErrNoSignal, guide)
+	}
+	return e, nil
+}
+
+func (d *Device) parseChannelPath(ctx context.Context, s string) (streamReq, error) {
 	var rq streamReq
 	switch {
 	case strings.HasPrefix(s, "v"):
-		e, ok := d.lineup.Find(s[1:])
-		if !ok {
-			return rq, fmt.Errorf("%w %q", errUnknownChannel, s[1:])
+		e, err := d.resolve(ctx, s[1:])
+		if err != nil {
+			return rq, err
 		}
 		rq.spec = chanmap.Spec{Modulation: "auto", Frequency: e.Frequency}
 		rq.program, rq.vchannel, rq.service = e.Program, e.GuideNumber, e.Modulation == "atsc3"
@@ -360,7 +383,7 @@ func (d *Device) parseChannelPath(s string) (streamReq, error) {
 		m := reChMod.FindStringSubmatch(s)
 		return d.numericChannel(m[1], m[2], m[3])
 	}
-	return rq, fmt.Errorf("unrecognised channel %q", s)
+	return rq, fmt.Errorf("%w %q", errBadChannel, s)
 }
 
 func (d *Device) numericChannel(mod, num, prog string) (streamReq, error) {
@@ -503,6 +526,7 @@ var (
 	errBusyAll        = errors.New("all tuners in use")
 	errNotFound       = errors.New("not found")
 	errUnknownChannel = errors.New("unknown virtual channel")
+	errBadChannel     = errors.New("unrecognised channel")
 )
 
 func (d *Device) handleStream(w http.ResponseWriter, r *http.Request) {
@@ -511,20 +535,20 @@ func (d *Device) handleStream(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	rq, err := d.parseChannelPath(ch)
-	if err != nil {
-		if errors.Is(err, errUnknownChannel) {
-			httpErr(w, http.StatusNotFound, "801 Unknown Channel")
-		} else {
-			httpErr(w, http.StatusNotFound, "")
-		}
-		return
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	rq, err := d.parseChannelPath(ctx, ch)
+	var v *VTuner
+	var sub *hub.Sub
+	if err == nil {
+		v, sub, err = d.openStream(ctx, which, rq)
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	v, sub, err := d.openStream(ctx, which, rq)
 	cancel()
 	if err != nil {
 		switch {
+		case errors.Is(err, errUnknownChannel):
+			httpErr(w, http.StatusNotFound, "801 Unknown Channel")
+		case errors.Is(err, errBadChannel):
+			httpErr(w, http.StatusNotFound, "")
 		case errors.Is(err, errNotFound):
 			httpErr(w, http.StatusNotFound, "")
 		case errors.Is(err, ErrBusy):

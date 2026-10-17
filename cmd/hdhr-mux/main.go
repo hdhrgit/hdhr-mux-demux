@@ -92,6 +92,13 @@ func main() {
 	h := hub.New(pool, hub.Config{Linger: linger, ClientBuffer: cfg.ClientBufferMB << 20})
 	defer h.Close()
 
+	refresh := time.Duration(cfg.Lineup.Refresh)
+	if refresh == 0 {
+		refresh = 10 * time.Minute
+	}
+	if refresh < 0 {
+		refresh = 0
+	}
 	dev, err := vdev.New(vdev.Config{
 		DeviceID:      id,
 		FriendlyName:  cfg.FriendlyName,
@@ -104,6 +111,7 @@ func main() {
 		ScanFrom:      cfg.Lineup.ScanFrom,
 		ScanTo:        cfg.Lineup.ScanTo,
 		ScanTuners:    cfg.Lineup.ScanTuners,
+		LineupRefresh: refresh,
 		HTTPAddr:      cfg.HTTPListen,
 		ControlAddr:   cfg.ControlListen,
 		StreamAddr:    cfg.StreamListen,
@@ -122,7 +130,7 @@ func main() {
 	log.Printf("virtual HDHomeRun %s up: %d tuner(s), %d channel(s), http :%d, control :%d",
 		hdhrproto.FormatDeviceID(id), tuners, len(lu.Entries(true)), dev.HTTPPort(), dev.ControlPort())
 
-	if *scan || (cfg.Lineup.ScanOnStart && len(lu.Entries(true)) == 0) {
+	if *scan || cfg.Lineup.ScanOnStart {
 		if err := dev.StartScan(""); err != nil {
 			log.Printf("scan: %v", err)
 		}

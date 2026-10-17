@@ -161,3 +161,99 @@ func (l *Lineup) Modulation(freq uint64) string {
 	}
 	return ""
 }
+
+// DeviceEntry is a channel as listed by a physical device's own lineup.
+type DeviceEntry struct {
+	GuideNumber string
+	GuideName   string
+	VideoCodec  string
+	AudioCodec  string
+	HD          bool
+	Favorite    bool
+	DRM         bool
+}
+
+// Merge makes the devices' lineups the channel list: names and codec, HD and
+// DRM details come from them, RF details already learned for a channel are
+// kept, and channels no device lists any more are dropped. It reports how many
+// channels were added and removed.
+func (l *Lineup) Merge(devs []DeviceEntry) (added, removed int, err error) {
+	l.mu.Lock()
+	old := map[string]Entry{}
+	for _, e := range l.entries {
+		old[e.GuideNumber] = e
+	}
+	var out []Entry
+	seen := map[string]bool{}
+	for _, d := range devs {
+		if seen[d.GuideNumber] {
+			continue
+		}
+		seen[d.GuideNumber] = true
+		e, known := old[d.GuideNumber]
+		if !known {
+			added++
+			e = Entry{GuideNumber: d.GuideNumber, Favorite: d.Favorite}
+		}
+		e.GuideName, e.VideoCodec, e.AudioCodec, e.HD = d.GuideName, d.VideoCodec, d.AudioCodec, d.HD
+		e.DRM = e.DRM || d.DRM
+		out = append(out, e)
+	}
+	for g := range old {
+		if !seen[g] {
+			removed++
+		}
+	}
+	sortEntries(out)
+	l.entries = out
+	l.mu.Unlock()
+	return added, removed, l.save()
+}
+
+func sortEntries(es []Entry) {
+	sort.SliceStable(es, func(i, j int) bool { return guideLess(es[i].GuideNumber, es[j].GuideNumber) })
+}
+
+// LearnRF records where channels live on the air (frequency, program,
+// modulation). Known channels are updated; unknown ones are added only if
+// addUnknown is set (an explicit scan). It reports how many entries changed.
+func (l *Lineup) LearnRF(es []Entry, addUnknown bool) (changed int) {
+	l.mu.Lock()
+	idx := map[string]int{}
+	for i, e := range l.entries {
+		idx[e.GuideNumber] = i
+	}
+	for _, n := range es {
+		i, ok := idx[n.GuideNumber]
+		if !ok {
+			if !addUnknown {
+				continue
+			}
+			l.entries = append(l.entries, n)
+			idx[n.GuideNumber] = len(l.entries) - 1
+			changed++
+			continue
+		}
+		e := &l.entries[i]
+		if e.Frequency == n.Frequency && e.Program == n.Program && e.Modulation == n.Modulation {
+			continue
+		}
+		e.Frequency, e.Program, e.Modulation = n.Frequency, n.Program, n.Modulation
+		if e.Source == "" {
+			e.Source = n.Source
+		}
+		if n.SignalQuality != 0 {
+			e.SignalQuality = n.SignalQuality
+		}
+		e.DRM = e.DRM || n.DRM
+		changed++
+	}
+	if changed > 0 {
+		sortEntries(l.entries)
+	}
+	l.mu.Unlock()
+	if changed > 0 {
+		l.save()
+	}
+	return changed
+}

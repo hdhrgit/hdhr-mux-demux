@@ -37,6 +37,9 @@ type Config struct {
 	Sources       map[string]string
 	DefaultSource string
 	ScanFrom      int // first/last channel number to scan (0 = whole map)
+	// LineupRefresh is how often the devices' own lineups are re-read (0 =
+	// only when asked, e.g. by a rescan).
+	LineupRefresh time.Duration
 	// ScanTuners limits how many tuners of each device a scan uses (0 = every
 	// free one, like a real device's own scan; viewers are never evicted).
 	ScanTuners int
@@ -144,6 +147,7 @@ func New(cfg Config, h *hub.Hub, lu *lineup.Lineup) (*Device, error) {
 		return nil, err
 	}
 	d := &Device{cfg: cfg, hub: h, lineup: lu, quit: make(chan struct{}), source: cfg.DefaultSource}
+	h.SetLearner(d.learn)
 	for i := 0; i < cfg.Tuners; i++ {
 		d.tuners = append(d.tuners, newVTuner(d, i))
 	}
@@ -190,6 +194,10 @@ func (d *Device) Start() error {
 	go func() { defer d.wg.Done(); hdhrproto.ServeUDP(d.udpConn, d) }()
 	d.wg.Add(1)
 	go d.reaper()
+	if d.cfg.LineupRefresh > 0 {
+		d.wg.Add(1)
+		go d.lineupLoop()
+	}
 	if d.cfg.SSDP {
 		d.ssdp = newSSDP(d)
 		if err := d.ssdp.start(); err != nil {
@@ -414,6 +422,55 @@ func (d *Device) help() string {
 		"/tuner<n>/status\n/tuner<n>/plpinfo\n/tuner<n>/streaminfo\n/tuner<n>/target <ip>:<port>\n/tuner<n>/vchannel <vchannel>\n"
 }
 
+// ---- lineup -----------------------------------------------------------
+
+// learn records where channels were seen on the air.
+func (d *Device) learn(es []lineup.Entry) {
+	d.scanMu.Lock()
+	src := d.source
+	d.scanMu.Unlock()
+	for i := range es {
+		if es[i].Source == "" {
+			es[i].Source = src
+		}
+	}
+	d.lineup.LearnRF(es, false)
+}
+
+// RefreshLineup re-reads the lineups of the physical devices, which are the
+// channel list (names, codecs, HD/DRM flags). Where each channel is on the air
+// is kept from what was learned before.
+func (d *Device) RefreshLineup(ctx context.Context) error {
+	devs := d.hub.Pool().Devices()
+	entries, answered := hub.FetchLineups(ctx, devs)
+	if answered == 0 || len(entries) == 0 {
+		return errors.New("no device returned a lineup")
+	}
+	added, removed, err := d.lineup.Merge(entries)
+	if added > 0 || removed > 0 {
+		log.Printf("lineup: %d channel(s) from %d device(s) (%d added, %d removed)", len(entries), answered, added, removed)
+	}
+	return err
+}
+
+func (d *Device) lineupLoop() {
+	defer d.wg.Done()
+	t := time.NewTicker(d.cfg.LineupRefresh)
+	defer t.Stop()
+	for first := true; ; first = false {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := d.RefreshLineup(ctx); err != nil && first {
+			log.Printf("lineup: %v", err)
+		}
+		cancel()
+		select {
+		case <-d.quit:
+			return
+		case <-t.C:
+		}
+	}
+}
+
 // ---- scanning ----------------------------------------------------------
 
 // StartScan begins a background channel scan for source (default source if
@@ -461,10 +518,13 @@ func (d *Device) StartScan(source string) error {
 		} else if ctx.Err() != nil {
 			log.Printf("scan: aborted")
 		} else {
-			if err := d.lineup.Replace(found); err != nil {
-				log.Printf("scan: saving lineup: %v", err)
+			// A scan teaches where channels are (and adds any the devices do
+			// not list); the channel list itself stays the devices'.
+			n := d.lineup.LearnRF(found, true)
+			if err := d.RefreshLineup(context.Background()); err != nil {
+				log.Printf("scan: refreshing lineup: %v", err)
 			}
-			log.Printf("scan: finished, %d programs found", len(found))
+			log.Printf("scan: finished, %d programs found, %d updated", len(found), n)
 			end = "complete"
 		}
 		d.scanMu.Lock()

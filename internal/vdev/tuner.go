@@ -653,12 +653,14 @@ func (v *VTuner) retarget(ctx context.Context, spec chanmap.Spec, program uint16
 }
 
 func (v *VTuner) setVChannel(value string) (string, error) {
-	e, ok := v.d.lineup.Find(value)
-	if !ok {
-		return "", errors.New("ERROR: invalid virtual channel")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
+	e, err := v.d.resolve(ctx, value)
+	if errors.Is(err, errUnknownChannel) {
+		return "", errors.New("ERROR: invalid virtual channel")
+	} else if err != nil {
+		return "", errors.New("ERROR: " + userError(err))
+	}
 	o := hub.Options{Program: e.Program, Service: e.Modulation == "atsc3"}
 	if err := v.tuneLocked(ctx, chanmap.Spec{Modulation: "auto", Frequency: e.Frequency}, o); err != nil {
 		return "", errors.New("ERROR: " + userError(err))

@@ -70,11 +70,12 @@ type stream struct {
 	lost     atomic.Uint64
 	rxBytes  atomic.Uint64
 
-	smu        sync.Mutex // guards status & info
-	status     upstream.Status
-	statusAt   time.Time
-	streamInfo string
-	infoAt     time.Time
+	smu         sync.Mutex // guards status & info
+	status      upstream.Status
+	statusAt    time.Time
+	streamInfo  string
+	infoAt      time.Time
+	learnedInfo string
 
 	rateAt    time.Time // bitrate sampling for Info
 	rateBytes uint64
@@ -399,6 +400,7 @@ func (st *stream) pollStatus(lease *upstream.Lease) (upstream.Status, bool) {
 	need := !strings.Contains(st.streamInfo, "tsid=") || time.Since(st.infoAt) > 5*time.Second
 	st.smu.Unlock()
 	if need {
+		defer st.learnFromInfo()
 		if lease.Reclaim() {
 			log.Printf("hub: lock on %s was released externally; re-taken", lease.ID())
 		}
@@ -409,6 +411,19 @@ func (st *stream) pollStatus(lease *upstream.Lease) (upstream.Status, bool) {
 		}
 	}
 	return s, true
+}
+
+// learnFromInfo tells the hub which channels the stream's multiplex carries
+// (once per change of the program list).
+func (st *stream) learnFromInfo() {
+	st.smu.Lock()
+	info, lock := st.streamInfo, st.status.Lock
+	changed := info != st.learnedInfo
+	st.learnedInfo = info
+	st.smu.Unlock()
+	if changed && lock != "" && lock != "none" {
+		st.h.learn(ParseStreamInfo(info, st.spec.Frequency, lock, ""))
+	}
 }
 
 // failover moves the stream to a different physical tuner (or re-tunes the

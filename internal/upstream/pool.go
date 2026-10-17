@@ -77,6 +77,7 @@ type Device struct {
 	IP         net.IP
 	Port       int // control port
 	StreamPort int
+	WebPort    int // HTTP API port (lineup.json), 80 on real devices
 	TunerCount int
 	Model      string // /sys/model, e.g. hdhomerun5_atsc3
 	ctl        *hdhrproto.Control
@@ -194,6 +195,15 @@ func (p *Pool) saveOrderLocked() {
 	}
 }
 
+// SetWebPort overrides the HTTP API port of one device.
+func (p *Pool) SetWebPort(id uint32, port int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if d := p.devices[id]; d != nil {
+		d.WebPort = port
+	}
+}
+
 // SetStreamPort overrides the HTTP streaming port of one device.
 func (p *Pool) SetStreamPort(id uint32, port int) {
 	p.mu.Lock()
@@ -238,14 +248,23 @@ func (p *Pool) Refresh() {
 		if known && old.IP.Equal(inf.IP) && old.Port == inf.Port {
 			continue
 		}
-		d := &Device{ID: inf.DeviceID, IP: inf.IP, Port: inf.Port, StreamPort: p.cfg.StreamPort, TunerCount: inf.TunerCount}
+		d := &Device{ID: inf.DeviceID, IP: inf.IP, Port: inf.Port, StreamPort: p.cfg.StreamPort, WebPort: 80, TunerCount: inf.TunerCount}
 		d.ctl = hdhrproto.NewControl(d.Addr())
 		d.Model, _ = d.ctl.Get("/sys/model")
+		if d.Model == "hdhomerun_mux" {
+			// Another multiplexer is not a physical device: using it would loop.
+			d.ctl.Close()
+			p.mu.Lock()
+			p.ignore[inf.DeviceID] = true
+			p.mu.Unlock()
+			log.Printf("upstream: ignoring %s at %s: it is a multiplexer", hdhrproto.FormatDeviceID(inf.DeviceID), d.Addr())
+			continue
+		}
 
 		p.mu.Lock()
 		if known {
 			old.ctl.Close()
-			d.StreamPort = old.StreamPort
+			d.StreamPort, d.WebPort = old.StreamPort, old.WebPort
 		}
 		p.devices[d.ID] = d
 		p.registerLocked(d)

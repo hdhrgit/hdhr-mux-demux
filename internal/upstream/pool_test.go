@@ -76,3 +76,19 @@ func TestStableGlobalNumbering(t *testing.T) {
 		t.Fatalf("existing numbering changed")
 	}
 }
+
+// Another multiplexer on the network must not be mistaken for a physical
+// device (it would be used as a source of itself).
+func TestIgnoresOtherMultiplexers(t *testing.T) {
+	real := fake(t, 0x10100000, 2)
+	mux, err := fakehdhr.Start(fakehdhr.Config{DeviceID: hdhrproto.MakeDeviceID(0x10300000), Tuners: 8, Model: "hdhomerun_mux"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mux.Close()
+	p, _ := upstream.NewPool(upstream.Config{Devices: []string{real.Addr(), mux.Addr()}})
+	p.Refresh()
+	if got := p.TotalTuners(); got != 2 {
+		t.Fatalf("%d tuners, want only the 2 of the real device", got)
+	}
+}

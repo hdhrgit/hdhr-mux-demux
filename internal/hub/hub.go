@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"hdhrmux/internal/chanmap"
+	"hdhrmux/internal/lineup"
 	"hdhrmux/internal/ts"
 	"hdhrmux/internal/upstream"
 )
@@ -29,16 +31,18 @@ type Hub struct {
 	cfg  Config
 	pool *upstream.Pool
 
-	mu      sync.Mutex
-	streams map[string]*stream
-	service map[uint64]bool // RF channels known to be ATSC 3.0 (one device-selected service per tuner)
+	mu       sync.Mutex
+	streams  map[string]*stream
+	learner  func([]lineup.Entry)     // told what streams and probes reveal about channels
+	learning map[string]chan struct{} // virtual channels being probed right now
+	service  map[uint64]bool          // RF channels known to be ATSC 3.0 (one device-selected service per tuner)
 }
 
 func New(pool *upstream.Pool, cfg Config) *Hub {
 	if cfg.ClientBuffer == 0 {
 		cfg.ClientBuffer = 16 << 20
 	}
-	h := &Hub{cfg: cfg, pool: pool, streams: map[string]*stream{}, service: map[uint64]bool{}}
+	h := &Hub{cfg: cfg, pool: pool, streams: map[string]*stream{}, service: map[uint64]bool{}, learning: map[string]chan struct{}{}}
 	pool.Reclaim = h.reclaim
 	return h
 }
@@ -512,6 +516,61 @@ func (s *Sub) Key() string { return s.st.key }
 // each service is delivered by its own physical tuner.
 func (s *Sub) NeedsRetarget(program uint16) bool {
 	return s.st.h.isService(s.st.spec.Frequency) && program != s.st.program
+}
+
+// SetLearner registers the function that is told which RF channel, program
+// and modulation channels were seen on, so the lineup can remember them.
+func (h *Hub) SetLearner(f func([]lineup.Entry)) {
+	h.mu.Lock()
+	h.learner = f
+	h.mu.Unlock()
+}
+
+func (h *Hub) learn(es []lineup.Entry) {
+	h.mu.Lock()
+	f := h.learner
+	h.mu.Unlock()
+	if f != nil && len(es) > 0 {
+		f(es)
+	}
+}
+
+// LearnVChannel finds out where a virtual channel lives by tuning it by name
+// on a free tuner (the device resolves it from its own lineup) and reading the
+// multiplex's program list. Concurrent requests for the same channel share one
+// probe. Everything on the same multiplex is learned at once.
+func (h *Hub) LearnVChannel(ctx context.Context, vchannel string) error {
+	h.mu.Lock()
+	if wait, ok := h.learning[vchannel]; ok {
+		h.mu.Unlock()
+		select {
+		case <-wait:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	done := make(chan struct{})
+	h.learning[vchannel] = done
+	h.mu.Unlock()
+	defer func() {
+		h.mu.Lock()
+		delete(h.learning, vchannel)
+		h.mu.Unlock()
+		close(done)
+	}()
+
+	res, err := h.pool.Probe(ctx, vchannel)
+	if err != nil {
+		return err
+	}
+	es := ParseStreamInfo(res.StreamInfo, res.Frequency, res.Lock, "")
+	if strings.HasPrefix(res.Lock, "atsc3") {
+		h.markService(res.Frequency)
+	}
+	h.learn(es)
+	log.Printf("hub: learned %d channel(s) on %d Hz (%s) while looking for %s", len(es), res.Frequency, res.Lock, vchannel)
+	return nil
 }
 
 // Pool returns the physical tuner pool the hub allocates from.

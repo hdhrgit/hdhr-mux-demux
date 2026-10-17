@@ -165,7 +165,6 @@ func (h *Hub) Scan(ctx context.Context, cfg ScanConfig, progress func(Progress))
 		return nil, ctx.Err()
 	}
 	out := mergeEntries(found)
-	enrich(ctx, out, devs)
 	return out, nil
 }
 
@@ -202,39 +201,51 @@ func mergeEntries(es []lineup.Entry) []lineup.Entry {
 	return out
 }
 
-// enrich fills codec and HD details from the physical devices' own lineups.
-func enrich(ctx context.Context, es []lineup.Entry, devs []*upstream.Device) {
-	type devEntry struct {
+// FetchLineups reads the lineup of every device (the channels the firmware
+// itself keeps, with names, codecs and HD/DRM flags). A channel listed by
+// several devices appears once, from the first device that lists it. The
+// second result is how many devices answered.
+func FetchLineups(ctx context.Context, devs []*upstream.Device) ([]lineup.DeviceEntry, int) {
+	type item struct {
 		GuideNumber string
+		GuideName   string
 		VideoCodec  string
 		AudioCodec  string
 		HD          int
+		Favorite    int
+		DRM         int
 	}
-	meta := map[string]devEntry{}
-	client := &http.Client{Timeout: 5 * time.Second}
+	var out []lineup.DeviceEntry
+	seen := map[string]bool{}
+	answered := 0
+	client := &http.Client{Timeout: 8 * time.Second}
 	for _, d := range devs {
-		req, _ := http.NewRequestWithContext(ctx, "GET", "http://"+net.JoinHostPort(d.IP.String(), "80")+"/lineup.json", nil)
+		url := "http://" + net.JoinHostPort(d.IP.String(), strconv.Itoa(d.WebPort)) + "/lineup.json"
+		req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 		resp, err := client.Do(req)
 		if err != nil {
 			continue
 		}
-		var list []devEntry
+		var list []item
 		err = json.NewDecoder(resp.Body).Decode(&list)
 		resp.Body.Close()
 		if err != nil {
 			continue
 		}
+		answered++
 		for _, e := range list {
-			if _, ok := meta[e.GuideNumber]; !ok {
-				meta[e.GuideNumber] = e
+			if e.GuideNumber == "" || seen[e.GuideNumber] {
+				continue
 			}
+			seen[e.GuideNumber] = true
+			out = append(out, lineup.DeviceEntry{
+				GuideNumber: e.GuideNumber, GuideName: e.GuideName,
+				VideoCodec: e.VideoCodec, AudioCodec: e.AudioCodec,
+				HD: e.HD == 1, Favorite: e.Favorite == 1, DRM: e.DRM == 1,
+			})
 		}
 	}
-	for i := range es {
-		if m, ok := meta[es[i].GuideNumber]; ok {
-			es[i].VideoCodec, es[i].AudioCodec, es[i].HD = m.VideoCodec, m.AudioCodec, m.HD == 1
-		}
-	}
+	return out, answered
 }
 
 // minSignal is the signal strength (%) below which a channel is considered
