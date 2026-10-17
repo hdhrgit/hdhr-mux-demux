@@ -120,10 +120,14 @@ func (d *Device) serveHTTPStream(w http.ResponseWriter, r *http.Request) {
 
 	d.mu.Lock()
 	t := d.tuners[idx]
-	if t.cancel != nil || t.lockkey != 0 {
+	if t.lockkey != 0 {
 		d.mu.Unlock()
 		hdhrErr(w, 503, "804 Tuner In Use")
 		return
+	}
+	if t.cancel != nil { // a session without a lock can be taken over, as on the real thing
+		d.stopStream(t)
+		t.target, t.channel = "none", "none"
 	}
 	fc := d.findChannel(freq)
 	switch {

@@ -96,7 +96,7 @@ func main() {
 
 	guideRefresh := time.Duration(cfg.Guide.Refresh)
 	if guideRefresh == 0 {
-		guideRefresh = 6 * time.Hour
+		guideRefresh = 3 * time.Hour
 	}
 	if guideRefresh < 0 {
 		guideRefresh = 0
@@ -124,6 +124,7 @@ func main() {
 		GuideRefresh:    guideRefresh,
 		GuideHold:       time.Duration(cfg.Guide.Hold),
 		GuideParallel:   cfg.Guide.Parallel,
+		GuideUnlocked:   cfg.Guide.Unlocked,
 		GuideStartDelay: time.Duration(cfg.Guide.StartDelay),
 		HTTPAddr:        cfg.HTTPListen,
 		ControlAddr:     cfg.ControlListen,

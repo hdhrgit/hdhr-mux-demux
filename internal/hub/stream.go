@@ -39,6 +39,7 @@ type stream struct {
 	// background streams exist only to collect the guide; they give way to
 	// anyone who needs the tuner.
 	background bool
+	unlocked   bool            // lock-less (see Options.Unlocked)
 	collector  *psip.Collector // PSIP guide tables (whole-multiplex streams only)
 	lastGuide  time.Time
 	tuner      int // physical tuner it is pinned to, -1 for any
@@ -138,6 +139,7 @@ func (st *stream) request(skip map[string]bool) upstream.Request {
 		Service:   st.service || st.h.isService(st.spec.Frequency),
 		Tuner:     st.tuner,
 		Skip:      skip,
+		Unlocked:  st.unlocked,
 	}
 }
 
@@ -392,6 +394,12 @@ func (st *stream) monitor() {
 		case <-t.C:
 		}
 		lease := st.currentLease()
+		if lease.Unlocked() && lease.Claimed() {
+			// Somebody else took the tuner: that is what unlocked is for. End quietly.
+			log.Printf("hub: %s on %s was taken over; letting it go", st.key, lease.ID())
+			go st.h.dropStream(st)
+			return
+		}
 		stalled := false
 		if !broken {
 			s, ok := st.pollStatus(lease)

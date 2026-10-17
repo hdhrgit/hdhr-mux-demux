@@ -63,10 +63,12 @@ type Config struct {
 
 // Guide controls the programme guide collected from the broadcasts.
 type Guide struct {
-	Refresh    Duration `json:"refresh"`     // how often idle multiplexes are listened to (default 6h, -1s = never)
+	Refresh    Duration `json:"refresh"`     // how often idle multiplexes are listened to (default 3h, -1s = never)
 	Hold       Duration `json:"hold"`        // time spent on each multiplex (default 45s)
 	Parallel   int      `json:"parallel"`    // multiplexes listened to at once (default 3)
 	StartDelay Duration `json:"start_delay"` // wait after start-up (default 90s)
+	// Unlocked listens without locking the tuner so others can take it over; needs UDP from the devices to this host.
+	Unlocked bool `json:"unlocked"`
 }
 
 type Upstream struct {

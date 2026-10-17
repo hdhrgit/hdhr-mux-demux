@@ -1805,3 +1805,50 @@ func TestGuidePassAndYielding(t *testing.T) {
 		t.Fatalf("POST /epg/refresh: %v %v", resp, err)
 	}
 }
+
+// An unlocked guide pass holds no lock: another application can take the
+// tuner at any moment, the pass lets go without touching what the new user set
+// up, and the new user's stream carries on.
+func TestUnlockedGuidePassYieldsToOutsiders(t *testing.T) {
+	e := setup(t, []int{1}, 1, func(c *vdev.Config) { c.GuideHold = 8 * time.Second; c.GuideUnlocked = true })
+	e.lu.Replace(append([]lineup.Entry(nil), testLineup[2:]...)) // 14.1, 14.3 on 473 MHz only
+	raw := hdhrproto.NewControl(e.fakes[0].Addr())
+	defer raw.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		e.dev.GuidePass(context.Background())
+	}()
+	waitFor(t, "pass listening without a lock", 5*time.Second, func() bool {
+		tg, _ := raw.Get("/tuner0/target")
+		return strings.HasPrefix(tg, "rtp://")
+	})
+	if lk, _ := raw.Get("/tuner0/lockkey"); lk != "none" {
+		t.Fatalf("the guide pass holds a lock (%q)", lk)
+	}
+
+	// an outsider takes the tuner
+	began := time.Now()
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/tuner0/ch177000000", e.fakes[0].StreamPort()))
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("an outsider could not take an unlocked tuner: %v %v", resp, err)
+	}
+	defer resp.Body.Close()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pass did not give up the tuner")
+	}
+	if time.Since(began) > 4*time.Second {
+		t.Fatalf("the pass took %v to notice", time.Since(began))
+	}
+	// the outsider's stream goes on, and nothing of theirs was cleared
+	buf := make([]byte, 188*100)
+	if _, err := io.ReadFull(resp.Body, buf); err != nil {
+		t.Fatalf("the outsider's stream was disturbed: %v", err)
+	}
+	if ch, _ := raw.Get("/tuner0/channel"); !strings.Contains(ch, "177000000") {
+		t.Fatalf("the pass cleared the new user's channel: %q", ch)
+	}
+}

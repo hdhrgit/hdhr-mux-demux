@@ -86,7 +86,7 @@ func (d *Device) GuidePass(ctx context.Context) (done, total int, err error) {
 		go func() {
 			defer wg.Done()
 			for f := range work {
-				if err := d.hub.CollectGuide(ctx, chanmap.Spec{Modulation: "auto", Frequency: f}, hold); err != nil {
+				if err := d.hub.CollectGuide(ctx, chanmap.Spec{Modulation: "auto", Frequency: f}, hold, d.cfg.GuideUnlocked); err != nil {
 					log.Printf("guide: %d Hz: %v", f, err)
 					continue
 				}

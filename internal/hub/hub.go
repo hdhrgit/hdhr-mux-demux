@@ -61,6 +61,10 @@ type Options struct {
 	// Background marks a stream opened only to collect the guide: it is given
 	// up as soon as anyone else needs its tuner.
 	Background bool
+	// Unlocked (with Background) listens without holding the tuner's lock, so
+	// that anyone else can take it: the stream just ends when they do. Needs
+	// the device to reach this host over UDP.
+	Unlocked bool
 	// Pin makes the stream use physical tuner number Tuner (virtual tuner N
 	// is physical tuner N). Without it the pool picks any suitable tuner.
 	Pin   bool
@@ -78,8 +82,11 @@ func (h *Hub) base(spec chanmap.Spec, o Options) (key string, service bool, prog
 }
 
 func streamKey(base string, o Options) string {
-	if o.Pin {
+	switch {
+	case o.Pin:
 		return fmt.Sprintf("%s@%d", base, o.Tuner)
+	case o.Unlocked:
+		return base + "@unlocked" // never shared with viewers: it can vanish at any time
 	}
 	return base + "@any"
 }
@@ -167,6 +174,7 @@ func (h *Hub) subscribe(ctx context.Context, spec chanmap.Spec, o Options) (*Sub
 	if creator {
 		st = newStream(h, spec, base, key, service, program, o.Program, tuner)
 		st.background = o.Background
+		st.unlocked = o.Unlocked
 		st.idleSince = time.Now()
 		h.streams[key] = st
 	}
@@ -551,8 +559,11 @@ func (h *Hub) publishGuide(g psip.Guide) {
 
 // CollectGuide tunes a multiplex on any free tuner and listens to its guide
 // tables for hold. It gives the tuner up at once if someone else needs it.
-func (h *Hub) CollectGuide(ctx context.Context, spec chanmap.Spec, hold time.Duration) error {
-	sub, err := h.Subscribe(ctx, spec, Options{Background: true})
+func (h *Hub) CollectGuide(ctx context.Context, spec chanmap.Spec, hold time.Duration, unlocked bool) error {
+	if h.listening(spec) {
+		return nil // a running stream is already collecting this multiplex's guide
+	}
+	sub, err := h.Subscribe(ctx, spec, Options{Background: true, Unlocked: unlocked})
 	if err != nil {
 		return err
 	}
@@ -563,6 +574,40 @@ func (h *Hub) CollectGuide(ctx context.Context, spec chanmap.Spec, hold time.Dur
 	case <-ctx.Done():
 	}
 	return nil
+}
+
+// listening reports whether a running stream already carries the multiplex.
+func (h *Hub) listening(spec chanmap.Spec) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, st := range h.streams {
+		if !st.dead && !st.service && st.spec.Frequency == spec.Frequency && st.ready != nil {
+			select {
+			case <-st.ready:
+				if st.err == nil {
+					return true
+				}
+			default:
+			}
+		}
+	}
+	return false
+}
+
+// dropStream ends a stream that lost its tuner to someone else.
+func (h *Hub) dropStream(st *stream) {
+	h.mu.Lock()
+	if st.dead {
+		h.mu.Unlock()
+		return
+	}
+	st.dead = true
+	if st.idleTimer != nil {
+		st.idleTimer.Stop()
+	}
+	delete(h.streams, st.key)
+	h.mu.Unlock()
+	st.shutdown()
 }
 
 // SetLearner registers the function that is told which RF channel, program

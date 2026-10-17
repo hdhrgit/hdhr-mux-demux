@@ -120,7 +120,7 @@ titles and times, descriptions). The multiplexer reads it from the streams it al
 * **From running streams.** Any stream of a whole multiplex hands over the guide of every
   channel on it every few seconds, so watching one channel updates its neighbours.
 * **From a pass over the idle multiplexes.** After start-up (90 s) and then every
-  `guide.refresh` (default 6 h) it listens to each ATSC 1.0 multiplex in the lineup for
+  `guide.refresh` (default 3 h) it listens to each ATSC 1.0 multiplex in the lineup for
   `guide.hold` (45 s), `guide.parallel` (3) at a time, on spare tuners. A pass never keeps a
   tuner from a viewer: it gives it up at once. `POST /epg/refresh` starts one now.
 
@@ -128,6 +128,20 @@ It is served as **XMLTV** on `/epg` (also `/epg.xml`) and as JSON on `/epg.json`
 channels of the lineup. Options: `?hours=N` ahead (default 72), `?channel=7.1` (repeatable),
 `?all=1` to list channels without a guide. XMLTV channel ids are the guide numbers (`7.1`);
 times are UTC. The guide is kept in `<state_dir>/epg.json`.
+
+**How far ahead?** That is up to each station, which fills as many 3-hour EIT tables as it likes.
+On the test antenna the channels reach a median of 9 hours ahead (84 of 123 channels 6-12 h), 31
+channels 12-48 h, and the big networks' stations about 1.5 to 3 days (the longest 70 h). A
+client that reads the guide hourly therefore always has several hours in hand; the near
+term is refreshed by the passes and by any running stream, the far end only changes slowly.
+
+**Unlocked passes.** By default a pass pulls over HTTP, so the device locks the tuner for the
+duration. With `guide.unlocked: true` it instead tunes without a lock and has the device push
+RTP to this host: any other application may then take the tuner at any moment (checked on
+real devices: its HTTP request succeeds), the pass notices within a second, lets go without
+touching what the new user set up, and carries on with the next multiplex when a tuner is
+free. This needs the devices to reach this host over UDP, so it does not work through Docker
+NAT (host networking is fine).
 
 Limits: ATSC 3.0 services carry no PSIP, so they have no guide; Huffman-compressed text (rare)
 is not decoded; the broadcasts usually cover a day or two ahead.
