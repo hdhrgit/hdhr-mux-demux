@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -2035,4 +2036,78 @@ loop:
 	})
 	c.close()
 	waitFor(t, "released", 5*time.Second, func() bool { return e.activePhysical() == 0 })
+}
+
+// /metrics speaks the Prometheus text format and reflects what is happening.
+func TestMetrics(t *testing.T) {
+	e := setup(t, []int{2}, 2, nil)
+	c1, _ := e.open("/auto/v7.1")
+	c2, _ := e.open("/auto/v7.2")
+	if c1 == nil || c2 == nil {
+		t.Fatal("stream refused")
+	}
+	defer c1.close()
+	defer c2.close()
+	c1.read(t, 188*200)
+	_, resp := e.open("/tuner1/v14.1/nonsense") // a request that is refused
+	_ = resp
+
+	get := func() map[string]float64 {
+		r, err := http.Get(e.api + "/metrics")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Body.Close()
+		if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+			t.Fatalf("content type %q", ct)
+		}
+		b, _ := io.ReadAll(r.Body)
+		out := map[string]float64{}
+		helped := map[string]bool{}
+		for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+			if strings.HasPrefix(line, "# HELP ") {
+				helped[strings.Fields(line)[2]] = true
+				continue
+			}
+			if strings.HasPrefix(line, "#") {
+				continue
+			}
+			i := strings.LastIndex(line, " ")
+			if i < 0 {
+				t.Fatalf("bad line %q", line)
+			}
+			v, err := strconv.ParseFloat(line[i+1:], 64)
+			if err != nil {
+				t.Fatalf("bad value in %q", line)
+			}
+			out[line[:i]] = v
+			name := line[:i]
+			if j := strings.Index(name, "{"); j >= 0 {
+				name = name[:j]
+			}
+			if !helped[name] {
+				t.Fatalf("no HELP before %q", line)
+			}
+		}
+		return out
+	}
+	waitFor(t, "stream bitrate in metrics", 5*time.Second, func() bool {
+		return get()[`hdhrmux_stream_received_bits_per_second{tuner="`+hdhrproto.FormatDeviceID(e.fakes[0].ID())+`/0",channel="177000000"}`] > 0
+	})
+	m := get()
+	for k, want := range map[string]float64{
+		"hdhrmux_physical_tuners":                   2,
+		"hdhrmux_physical_tuners_in_use":            1,
+		"hdhrmux_virtual_tuners":                    2,
+		"hdhrmux_viewers":                           2,
+		"hdhrmux_streams_opened_total":              1,
+		`hdhrmux_stream_requests_total{code="200"}`: 2,
+	} {
+		if m[k] != want {
+			t.Errorf("%s = %v, want %v", k, m[k], want)
+		}
+	}
+	if m["process_cpu_seconds_total"] <= 0 || m["go_goroutines"] <= 0 {
+		t.Errorf("process metrics missing: cpu %v goroutines %v", m["process_cpu_seconds_total"], m["go_goroutines"])
+	}
 }

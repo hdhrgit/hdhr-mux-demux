@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
 )
 
 var reHTTPCh = regexp.MustCompile(`^ch(\d+)(?:-(\d+))?$`)

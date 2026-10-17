@@ -223,6 +223,28 @@ See [config.example.json](config.example.json). Notable keys:
   host; needs inbound UDP).
 * `linger` (5 s, `-1s` to disable), `client_buffer_mb` (16), `idle_release`.
 
+### Monitoring (`/metrics`)
+
+`GET /metrics` on the web port (80) answers in the Prometheus text format, so Prometheus,
+Netdata (`go.d` prometheus collector), Telegraf and VictoriaMetrics can scrape it. Names start with
+`hdhrmux_`; the process metrics follow the usual `process_*`/`go_*` names.
+
+| Metric | Meaning |
+|---|---|
+| `hdhrmux_physical_tuners`, `_online`, `_in_use` | tuners in the numbering, reachable, held by the mux |
+| `hdhrmux_tuner_online{tuner,global}`, `hdhrmux_tuner_in_use{…}` | the same per physical tuner |
+| `hdhrmux_stream_viewers`, `_received_bits_per_second`, `_received_bytes_total`, `_signal_strength_percent`, `_signal_quality_percent`, `_symbol_quality_percent{tuner,channel}` | one per tuned RF channel |
+| `hdhrmux_viewers`, `hdhrmux_viewers_sent_bits_per_second`, `hdhrmux_viewer_buffer_max_percent`, `hdhrmux_virtual_tuner_viewers{tuner}` | clients and what they receive |
+| `hdhrmux_streams_opened_total`, `_stream_failovers_total`, `_filter_updates_total`, `_idle_streams_reclaimed_total`, `_dropped_batches_total` | counters (dropped batches = slow clients) |
+| `hdhrmux_stream_requests_total{code}` | stream requests by answer: `200`, `804`, `805`, `806`, `807`, `404` |
+| `hdhrmux_lineup_channels`, `hdhrmux_guide_channels`, `_events`, `_guide_pass_running`, `_scan_running` | lineup, guide and scan state |
+| `process_cpu_seconds_total`, `process_resident_memory_bytes`, `process_open_fds`, `go_*` | the process |
+
+Useful alerts: `hdhrmux_physical_tuners_online` below `hdhrmux_physical_tuners` (a device is gone),
+`rate(hdhrmux_stream_failovers_total[10m]) > 0` (a tuner keeps failing), a rising
+`hdhrmux_dropped_batches_total` (a client cannot keep up), and
+`rate(hdhrmux_stream_requests_total{code="805"}[10m])` (viewers turned away: out of tuners).
+
 ### Environment variables
 
 These override the file and use the same names as the `hdhomerunsignal` tool where the

@@ -96,7 +96,7 @@ func newStream(h *Hub, spec chanmap.Spec, base, key string, service bool, progra
 	st := &stream{
 		h: h, key: key, spec: spec, service: service, program: program, req: req, base: base, tuner: tuner,
 		broken: make(chan struct{}, 1), maskKick: make(chan struct{}, 1),
-		ready:  make(chan struct{}), stop: make(chan struct{}),
+		ready: make(chan struct{}), stop: make(chan struct{}),
 		programs: map[uint16]uint16{}, pmts: map[uint16]*ts.PMT{},
 		sections: map[uint16]*ts.SectionReader{},
 	}
@@ -481,6 +481,7 @@ func (st *stream) learnFromInfo() {
 // failover moves the stream to a different physical tuner (or re-tunes the
 // same one when no other is free).
 func (st *stream) failover(old *upstream.Lease) bool {
+	st.h.stats.failovers.Add(1)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	go func() {

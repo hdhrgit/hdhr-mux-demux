@@ -35,6 +35,8 @@ type Hub struct {
 	cfg  Config
 	pool *upstream.Pool
 
+	stats counters
+
 	mu       sync.Mutex
 	streams  map[string]*stream
 	guide    func(psip.Guide)         // receives the programme guide found in streams
@@ -189,6 +191,9 @@ func (h *Hub) subscribe(ctx context.Context, spec chanmap.Spec, o Options) (*Sub
 
 	if creator {
 		st.err = st.start(ctx)
+		if st.err == nil {
+			h.stats.opened.Add(1)
+		}
 		if st.err != nil {
 			h.mu.Lock()
 			st.dead = true
@@ -270,6 +275,7 @@ func (h *Hub) reclaim(accept func(*upstream.Lease) bool) bool {
 	}
 	delete(h.streams, victim.key)
 	h.mu.Unlock()
+	h.stats.reclaims.Add(1)
 	log.Printf("hub: giving up idle channel %s to make room", victim.key)
 	victim.shutdown()
 	return true
@@ -482,6 +488,7 @@ func (s *Sub) Enable() {
 func (s *Sub) Close() {
 	s.once.Do(func() {
 		close(s.done)
+		s.st.h.stats.dropped.Add(s.drops.Load())
 		s.st.removeSub(s)
 		s.st.h.unref(s.st)
 	})

@@ -39,6 +39,7 @@ func (d *Device) routes() http.Handler {
 	mux.HandleFunc("POST /epg/refresh", d.handleEPGRefresh)
 	mux.HandleFunc("GET /status.json", d.handleStatus)
 	mux.HandleFunc("GET /tuners.html", d.handleTunersHTML)
+	mux.HandleFunc("GET /metrics", d.handleMetrics)
 	mux.HandleFunc("GET /lineup.html", d.handleLineupHTML)
 	mux.HandleFunc("GET /{tuner}/{channel}", d.handleStream)
 	return mux
@@ -415,6 +416,7 @@ func httpErr(w http.ResponseWriter, code int, hdhr string) {
 		h["X-HDHomeRun-Error"] = []string{hdhr} // exact case, as real devices send it
 	}
 	w.WriteHeader(code)
+	countStreamResponse(code, hdhr)
 }
 
 // openStream finds the virtual tuner for a stream request and starts it.
@@ -600,6 +602,7 @@ func (d *Device) handleStream(w http.ResponseWriter, r *http.Request) {
 	// uses it to poll that tuner's /tunerN/debug for its signal display.
 	h["X-HDHomeRun-Resource"] = []string{fmt.Sprintf("tuner%d", v.idx)}
 	w.WriteHeader(http.StatusOK)
+	countStreamResponse(http.StatusOK, "")
 	rc := http.NewResponseController(w)
 	rc.Flush()
 	pump(r.Context(), w, rc, sub, limit)

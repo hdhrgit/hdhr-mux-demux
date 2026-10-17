@@ -122,6 +122,7 @@ func (st *stream) masker(grace time.Duration) {
 			log.Printf("hub: %s on %s: filter: %v", st.key, lease.ID(), err)
 			continue
 		}
+		st.h.stats.maskUpdates.Add(1)
 		applied, shrinkSince = next, time.Time{}
 	}
 }

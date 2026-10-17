@@ -165,6 +165,7 @@ func New(cfg Config, h *hub.Hub, lu *lineup.Lineup) (*Device, error) {
 		return nil, err
 	}
 	d := &Device{cfg: cfg, hub: h, lineup: lu, quit: make(chan struct{}), source: cfg.DefaultSource}
+	resetStreamCounts() // the counters are process-wide; a new device starts them afresh
 	h.SetLearner(d.learn)
 	for i := 0; i < cfg.Tuners; i++ {
 		d.tuners = append(d.tuners, newVTuner(d, i))
