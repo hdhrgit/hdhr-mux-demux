@@ -91,7 +91,7 @@ func main() {
 	if linger < 0 {
 		linger = 0
 	}
-	h := hub.New(pool, hub.Config{Linger: linger, ClientBuffer: cfg.ClientBufferMB << 20})
+	h := hub.New(pool, hub.Config{Linger: linger, ClientBuffer: cfg.ClientBufferMB << 20, Mask: *cfg.Upstream.Mask})
 	defer h.Close()
 
 	guideRefresh := time.Duration(cfg.Guide.Refresh)

@@ -26,6 +26,9 @@ type Config struct {
 	// a slow consumer before data is dropped (default 16 MiB, about 6 s of a
 	// full ATSC 1.0 channel).
 	ClientBuffer int
+	// Mask asks the devices to send only the PIDs somebody watches (plus the
+	// tables and guide) instead of the whole multiplex.
+	Mask bool
 }
 
 type Hub struct {
@@ -394,6 +397,7 @@ func (s *Sub) SetProgram(program uint16) {
 		s.mode, s.program = modeProgram, program
 	}
 	s.filter.Store(s.st.buildFilterLocked(s))
+	s.st.kickMask()
 }
 
 // SetFilter passes exactly the given PIDs.
@@ -402,6 +406,7 @@ func (s *Sub) SetFilter(set ts.PIDSet) {
 	defer s.st.fmu.Unlock()
 	s.mode, s.pids, s.program = modePIDs, set, 0
 	s.filter.Store(s.st.buildFilterLocked(s))
+	s.st.kickMask()
 }
 
 // Program returns the selected program (0 if none).
@@ -469,6 +474,7 @@ func (s *Sub) Enable() {
 	s.rateAt = time.Time{}
 	s.rmu.Unlock()
 	s.active.Store(true)
+	s.st.kickMask()
 }
 
 // Close detaches the subscription; the physical tuner is released when the

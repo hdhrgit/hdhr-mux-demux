@@ -49,6 +49,45 @@ func (s *PIDSet) AddRange(lo, hi uint16) {
 	}
 }
 
+// Or returns the union of two sets.
+func (s PIDSet) Or(o PIDSet) PIDSet {
+	for i := range s {
+		s[i] |= o[i]
+	}
+	return s
+}
+
+// Minus returns the PIDs of s that are not in o.
+func (s PIDSet) Minus(o PIDSet) PIDSet {
+	for i := range s {
+		s[i] &^= o[i]
+	}
+	return s
+}
+
+// Empty reports whether the set contains no PID.
+func (s PIDSet) Empty() bool {
+	for _, w := range s {
+		if w != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// Ranges counts the runs of consecutive PIDs in the set.
+func (s PIDSet) Ranges() int {
+	n, in := 0, false
+	for p := 0; p <= PIDMax; p++ {
+		has := s.Has(uint16(p))
+		if has && !in {
+			n++
+		}
+		in = has
+	}
+	return n
+}
+
 // FullSet returns a set containing every PID.
 func FullSet() PIDSet {
 	var s PIDSet

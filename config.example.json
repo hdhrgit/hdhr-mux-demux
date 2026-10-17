@@ -14,7 +14,8 @@
     "allow": [],
     "tuners": [],
     "exclude": [],
-    "mode": "http"
+    "mode": "http",
+    "mask": true
   },
 
   "lineup": {

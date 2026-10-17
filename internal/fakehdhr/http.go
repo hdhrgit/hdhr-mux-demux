@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"hdhrmux/internal/ts"
 )
 
 var reHTTPCh = regexp.MustCompile(`^ch(\d+)(?:-(\d+))?$`)
@@ -164,6 +163,7 @@ func (d *Device) serveHTTPStream(w http.ResponseWriter, r *http.Request) {
 	}
 	host, _, _ := net.SplitHostPort(r.RemoteAddr)
 	t.channel, t.freq = fmt.Sprintf("auto:%d", freq), freq
+	t.resetFilter()
 	t.lockkey, t.lockIP, t.target = 0xFFFFFFFE, host, "http://"+r.RemoteAddr
 	cancel := make(chan struct{})
 	t.cancel = cancel
@@ -188,7 +188,13 @@ func (d *Device) serveHTTPStream(w http.ResponseWriter, r *http.Request) {
 		}
 		if t.session == mine { // not if somebody took the tuner over meanwhile
 			t.session = nil
-			t.channel, t.freq, t.lockkey, t.lockIP, t.target = "none", 0, 0, "", "none"
+			t.channel, t.freq, t.target = "none", 0, "none"
+			t.resetFilter()
+			// The device's own lock goes with the session; a key a client
+			// installed meanwhile stays until that client lets go (as on hardware).
+			if t.lockkey == 0xFFFFFFFE {
+				t.lockkey, t.lockIP = 0, ""
+			}
 		}
 		d.mu.Unlock()
 	}()
@@ -200,8 +206,7 @@ func (d *Device) serveHTTPStream(w http.ResponseWriter, r *http.Request) {
 	h["X-HDHomeRun-Resource"] = []string{fmt.Sprintf("tuner%d", idx)}
 	w.WriteHeader(200)
 	rc := http.NewResponseController(w)
-	full := ts.FullSet()
-	d.stream(t, ch, flushWriter{w, rc}, false, full, cancel)
+	d.stream(t, ch, flushWriter{w, rc}, false, &t.live, cancel)
 }
 
 type flushWriter struct {

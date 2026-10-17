@@ -33,9 +33,33 @@ tuner between every client watching the same RF channel**.
    `GET http://DEVICE:5004/tunerM/ch545000000` (the whole multiplex).
 4. The viewer's filter keeps PAT (rewritten to just program 6), PMT, PCR and
    the elementary streams; everything else is dropped.
-5. Data goes to the client from a per-client buffer (16 MiB by default); a slow
+5. Once the multiplex's tables are known, the device is told (through the tuner's PID
+   filter) to send only what is needed: see *Bandwidth* below.
+6. Data goes to the client from a per-client buffer (16 MiB by default); a slow
    client loses data, never holds the others up.
-6. When the last viewer leaves, the tuner is released (after `linger`).
+7. When the last viewer leaves, the tuner is released (after `linger`).
+
+### Bandwidth
+
+A tuner delivers its whole multiplex, about 19 Mbit/s, however few programs are watched.
+After the HTTP request has started, the mux takes the tuner's lock over (`lockkey force`, then
+a lock key of its own; the stream keeps flowing, checked on real devices) and sets the tuner's
+`filter` to the PAT, the PMTs, the PSIP guide tables and the audio, video and PCR PIDs of
+programs somebody watches. With one HD program on a multiplex that is roughly 6-9 Mbit/s
+over the LAN instead of 19; a lingering stream nobody watches drops to the tables alone.
+
+* Until the PAT is known (a few seconds) and whenever a viewer wants the whole multiplex
+  (`hdhomerun_config save` without a program, a raw PID filter covering everything), the
+  filter stays open.
+* A new viewer's PIDs are added at once; PIDs nobody needs any more are dropped after 5 s, so
+  flipping back and forth does not make the filter flap.
+* Guide collection is unaffected: the PSIP PIDs always stay in the filter, so the programmes of
+  unwatched channels keep arriving.
+* When the stream ends the mux puts the filter back to everything and releases the lock; a
+  lock left behind by a crash expires on the device by itself (under a minute, measured).
+* Not applied to ATSC 3.0 (the device already sends one service) and to `guide.unlocked`
+  passes (whoever takes such a tuner over would inherit the filter). A device that refuses the
+  lock swap is left unmasked. `upstream.mask: false` switches the feature off.
 
 ## Tuner numbering and allocation
 
@@ -193,6 +217,8 @@ See [config.example.json](config.example.json). Notable keys:
 * `discoverable: false` – hide the multiplexer: it ignores wildcard UDP discovery and
   does not announce over SSDP. It still answers requests naming its device ID and direct
   connections, so add it to a client by address.
+* `upstream.mask` – `false` to pull whole multiplexes (default `true`: only the PIDs being
+  watched, see *Bandwidth*).
 * `upstream.mode` – `http` (default) or `rtp`/`udp` (device pushes to this
   host; needs inbound UDP).
 * `linger` (5 s, `-1s` to disable), `client_buffer_mb` (16), `idle_release`.

@@ -44,7 +44,8 @@ type stream struct {
 	lastGuide  time.Time
 	tuner      int // physical tuner it is pinned to, -1 for any
 
-	broken chan struct{} // the source failed; wakes the monitor
+	broken   chan struct{} // the source failed; wakes the monitor
+	maskKick chan struct{} // demand for PIDs changed; wakes the masker
 
 	// guarded by Hub.mu
 	refs      int
@@ -72,6 +73,8 @@ type stream struct {
 	pmts     map[uint16]*ts.PMT
 	sections map[uint16]*ts.SectionReader // reader goroutine only
 	isPSI    [ts.PIDMax + 1]bool          // reader goroutine only
+	// PIDs of the guide tables, written by the reader goroutine under fmu
+	guidePIDs ts.PIDSet
 
 	lastData atomic.Int64 // unix nanos
 	lost     atomic.Uint64
@@ -92,7 +95,7 @@ type stream struct {
 func newStream(h *Hub, spec chanmap.Spec, base, key string, service bool, program, req uint16, tuner int) *stream {
 	st := &stream{
 		h: h, key: key, spec: spec, service: service, program: program, req: req, base: base, tuner: tuner,
-		broken: make(chan struct{}, 1),
+		broken: make(chan struct{}, 1), maskKick: make(chan struct{}, 1),
 		ready:  make(chan struct{}), stop: make(chan struct{}),
 		programs: map[uint16]uint16{}, pmts: map[uint16]*ts.PMT{},
 		sections: map[uint16]*ts.SectionReader{},
@@ -126,9 +129,10 @@ func (st *stream) start(ctx context.Context) error {
 	st.lastData.Store(time.Now().UnixNano())
 	log.Printf("hub: channel %s on physical tuner %s (#%d)", st.key, lease.ID(), lease.Global())
 	st.pollStatus(lease)
-	st.wg.Add(2)
+	st.wg.Add(3)
 	go st.reader()
 	go st.monitor()
+	go st.masker(MaskGrace)
 	return nil
 }
 
@@ -260,6 +264,7 @@ func (st *stream) process(b []byte) []byte {
 		}
 		if st.collector != nil && st.collector.Wants(pid) {
 			st.collector.Push(pid, p)
+			st.noteGuidePIDs()
 		}
 		for _, s := range subs {
 			s.offer(p, pid)
@@ -269,6 +274,16 @@ func (st *stream) process(b []byte) []byte {
 		s.flush()
 	}
 	return b
+}
+
+// noteGuidePIDs passes new guide PIDs (found in the MGT) on to the masker.
+func (st *stream) noteGuidePIDs() {
+	if set, grown := st.collector.WantedPIDs(); grown {
+		st.fmu.Lock()
+		st.guidePIDs = set
+		st.fmu.Unlock()
+		st.kickMask()
+	}
 }
 
 func (st *stream) handlePSI(pid uint16, p []byte) {
@@ -335,6 +350,7 @@ func (st *stream) recomputeLocked() {
 	for _, s := range *st.subs.Load() {
 		s.filter.Store(st.buildFilterLocked(s))
 	}
+	st.kickMask()
 }
 
 func (st *stream) addSub(s *Sub) {
@@ -359,6 +375,7 @@ func (st *stream) removeSub(s *Sub) {
 		}
 	}
 	st.subs.Store(&next)
+	st.kickMask()
 }
 
 // Programs returns the programs currently seen in the transport stream.
@@ -380,6 +397,7 @@ func (st *stream) Programs() []uint16 {
 var StallLimit = 8 * time.Second
 
 func (st *stream) monitor() {
+	stallLimit := StallLimit // read once: tests change it between streams
 	defer st.wg.Done()
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
@@ -409,7 +427,7 @@ func (st *stream) monitor() {
 				fails++
 			}
 			idleOK := st.h.isService(st.spec.Frequency) && st.program == 0 // ATSC 3.0 without a selected service carries no data
-			stalled = ok && !idleOK && s.Locked() && time.Since(time.Unix(0, st.lastData.Load())) > StallLimit
+			stalled = ok && !idleOK && s.Locked() && time.Since(time.Unix(0, st.lastData.Load())) > stallLimit
 			reset = ok && (s.Channel == "none" || s.Channel == "") // someone cleared the tuner
 		}
 		if fails >= 3 || stalled || reset || broken {
@@ -516,6 +534,7 @@ func (st *stream) swap(nl *upstream.Lease) {
 	st.lmu.Lock()
 	st.lease = nl
 	st.lmu.Unlock()
+	st.kickMask()
 	st.lastData.Store(time.Now().UnixNano())
 	select { // drop a stale failure notice
 	case <-st.broken:

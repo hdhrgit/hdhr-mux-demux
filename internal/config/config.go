@@ -84,6 +84,9 @@ type Upstream struct {
 	StreamPort int      `json:"stream_port"` // device streaming port (default 5004)
 	LocalIP    string   `json:"local_ip"`    // address devices should stream to
 	WaitFree   Duration `json:"wait_free"`
+	// Mask makes the devices send only the PIDs somebody watches, plus the
+	// tables and guide, rather than the whole multiplex (default true).
+	Mask *bool `json:"mask"`
 }
 
 type Lineup struct {
@@ -161,6 +164,10 @@ func Load(path string) (*Config, error) {
 	if c.Upstream.Discover == nil {
 		t := true
 		c.Upstream.Discover = &t
+	}
+	if c.Upstream.Mask == nil {
+		t := true
+		c.Upstream.Mask = &t
 	}
 	if c.SSDP == nil {
 		t := true

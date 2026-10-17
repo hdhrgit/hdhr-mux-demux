@@ -69,6 +69,7 @@ type tuner struct {
 	freq     uint64
 	chmap    string
 	filter   string
+	live     atomic.Pointer[ts.PIDSet] // the filter in force, read by the streaming goroutine
 	program  string
 	target   string
 	lockkey  uint32
@@ -113,7 +114,9 @@ func Start(cfg Config) (*Device, error) {
 		return nil, fmt.Errorf("fakehdhr: no free port pair")
 	}
 	for i := 0; i < cfg.Tuners; i++ {
-		d.tuners = append(d.tuners, &tuner{idx: i, channel: "none", filter: "0x0000-0x1FFF", program: "0", target: "none", chmap: cfg.ChannelMap})
+		t := &tuner{idx: i, channel: "none", program: "0", target: "none", chmap: cfg.ChannelMap}
+		t.resetFilter()
+		d.tuners = append(d.tuners, t)
 	}
 	if err := d.startHTTP(); err != nil {
 		return nil, err
@@ -297,10 +300,12 @@ func (d *Device) tunerVar(t *tuner, remote net.IP, v string, value *string, lock
 		return t.chmap, nil
 	case "filter":
 		if value != nil {
-			if _, err := ts.ParsePIDSet(*value); err != nil {
+			set, err := ts.ParsePIDSet(*value)
+			if err != nil {
 				return "", fmt.Errorf("ERROR: invalid set value")
 			}
 			t.filter = *value
+			t.live.Store(&set)
 		}
 		return t.filter, nil
 	case "program":
@@ -452,7 +457,6 @@ func (d *Device) startStream(t *tuner) {
 	if err != nil {
 		return
 	}
-	filter, _ := ts.ParsePIDSet(t.filter)
 	t.cancel = make(chan struct{})
 	n := 0
 	for _, o := range d.tuners {
@@ -464,7 +468,7 @@ func (d *Device) startStream(t *tuner) {
 		d.peak = n
 	}
 	go func(cancel chan struct{}) {
-		d.stream(t, ch, conn, rtp, filter, cancel)
+		d.stream(t, ch, conn, rtp, &t.live, cancel)
 		conn.Close()
 	}(t.cancel)
 }
@@ -474,7 +478,14 @@ func ProgramPIDs(i int) (pmt, video, audio uint16) {
 	return 0x0100 + uint16(i)*0x10, 0x0101 + uint16(i)*0x10, 0x0102 + uint16(i)*0x10
 }
 
-func (d *Device) stream(t *tuner, ch *Channel, conn io.Writer, rtp bool, filter ts.PIDSet, stop chan struct{}) {
+// resetFilter lets every PID through again, as a new stream session does.
+func (t *tuner) resetFilter() {
+	full := ts.FullSet()
+	t.filter = "0x0000-0x1FFF"
+	t.live.Store(&full)
+}
+
+func (d *Device) stream(t *tuner, ch *Channel, conn io.Writer, rtp bool, filter *atomic.Pointer[ts.PIDSet], stop chan struct{}) {
 	failed := false
 	cc := map[uint16]byte{}
 	next := func(pid uint16) byte { c := cc[pid]; cc[pid] = (c + 1) & 15; return c }
@@ -524,7 +535,7 @@ func (d *Device) stream(t *tuner, ch *Channel, conn io.Writer, rtp bool, filter 
 		batch = batch[:0]
 	}
 	emit := func(p []byte) {
-		if filter.Has(ts.PID(p)) {
+		if filter.Load().Has(ts.PID(p)) {
 			batch = append(batch, p...)
 			t.pkts.Add(1)
 			if len(batch) >= 7*188 {
@@ -635,4 +646,23 @@ func patBuild(ch *Channel) []byte {
 	sec[2] = byte(len(sec) - 3 + 4)
 	crc := ts.CRC32MPEG(sec)
 	return append(sec, byte(crc>>24), byte(crc>>16), byte(crc>>8), byte(crc))
+}
+
+// TunerFilter returns the PID filter of tuner idx as a set, and whether the
+// tuner is locked with a client's key.
+func (d *Device) TunerFilter(idx int) (set ts.PIDSet, keyLocked bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	t := d.tuners[idx]
+	return *t.live.Load(), t.lockkey != 0 && t.lockkey != 0xFFFFFFFE
+}
+
+// TunerPackets counts the packets tuner idx has sent through its filter.
+func (d *Device) TunerPackets(idx int) uint64 { return d.tuners[idx].pkts.Load() }
+
+// TunerLocked reports whether tuner idx is locked at all.
+func (d *Device) TunerLocked(idx int) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.tuners[idx].lockkey != 0
 }

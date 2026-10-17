@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -43,7 +44,13 @@ type Lease struct {
 	target   string
 	// control lock, used by rtp mode and scanning (HTTP streams are locked
 	// by the device itself for as long as the connection lives)
-	key uint32
+	key atomic.Uint32
+
+	// mu serialises SetFilter with Release, so a late filter change cannot
+	// re-lock a tuner that has just been given back.
+	mu       sync.Mutex
+	released bool
+	maskFail bool // taking the lock for masking failed once; do not try again
 }
 
 func (l *Lease) Device() *Device { return l.dev }
@@ -60,7 +67,7 @@ func (l *Lease) Get(v string) (string, error) { return l.dev.ctl.Get(l.name(v)) 
 
 // Set writes a control variable, presenting the lock key if we hold one.
 func (l *Lease) Set(v, val string) error {
-	_, err := l.dev.ctl.Set(l.name(v), val, l.key)
+	_, err := l.dev.ctl.Set(l.name(v), val, l.key.Load())
 	return err
 }
 
@@ -353,7 +360,7 @@ func (l *Lease) checkFree() error {
 // Claimed tells when that has happened.
 func (l *Lease) unlock(freq uint64) {
 	l.dev.ctl.Set(l.name("lockkey"), "force", 0)
-	l.key = 0
+	l.key.Store(0)
 	l.unlocked, l.freq = true, freq
 	l.target, _ = l.Get("target")
 }
@@ -401,17 +408,17 @@ func (l *Lease) lockControl() error {
 	if _, err := l.dev.ctl.Set(name, strconv.FormatUint(uint64(key), 10), 0); err != nil {
 		return err
 	}
-	l.key = key
+	l.key.Store(key)
 	return nil
 }
 
 // releaseControl clears and unlocks the tuner. If the lock was force-released
 // behind our back the stale key would be rejected, so it is dropped first.
 func (l *Lease) releaseControl() {
-	if l.key == 0 {
+	if l.key.Load() == 0 {
 		return
 	}
-	key := l.key
+	key := l.key.Load()
 	if v, err := l.Get("lockkey"); err == nil && v == "none" {
 		key = 0
 	}
@@ -421,20 +428,20 @@ func (l *Lease) releaseControl() {
 	set("filter", "0x0000-0x1FFF")
 	set("program", "0")
 	set("lockkey", "none")
-	l.key = 0
+	l.key.Store(0)
 }
 
 // Reclaim re-takes the control lock if it was released behind our back (for
 // example by "lockkey force"). It reports whether the lock had been lost.
 func (l *Lease) Reclaim() bool {
-	if l.key == 0 {
+	if l.key.Load() == 0 {
 		return false
 	}
 	v, err := l.Get("lockkey")
 	if err != nil || v != "none" {
 		return false
 	}
-	_, err = l.dev.ctl.Set(l.name("lockkey"), strconv.FormatUint(uint64(l.key), 10), 0)
+	_, err = l.dev.ctl.Set(l.name("lockkey"), strconv.FormatUint(uint64(l.key.Load()), 10), 0)
 	return err == nil
 }
 
@@ -468,6 +475,39 @@ func (p *Pool) AcquireControl(ctx context.Context, deviceID uint32) (*Lease, err
 	return nil, ErrNoTuner
 }
 
+// ErrMaskUnavailable means the stream cannot be masked (an unlocked session,
+// or the lock could not be taken); it delivers the whole multiplex.
+var ErrMaskUnavailable = errors.New("stream cannot be masked")
+
+// SetFilter limits the PIDs the device sends on our stream to the given
+// filter value ("0x0000 0x0100-0x0102"). A stream we pull over HTTP is held by
+// the device's own lock, which only lets the client who took it change the
+// tuner; so the first call trades that lock for one with a key of our own (the
+// stream keeps flowing). From then on the tuner stays locked until Release
+// puts the filter back and lets go. Unlocked sessions are never masked: whoever
+// takes the tuner over would inherit our filter.
+func (l *Lease) SetFilter(filter string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.released || l.unlocked || l.maskFail {
+		return ErrMaskUnavailable
+	}
+	if l.key.Load() == 0 {
+		var kb [4]byte
+		rand.Read(kb[:])
+		key := binary.BigEndian.Uint32(kb[:]) | 1
+		// Our own stream: drop the lock the device took for it and take it
+		// again with a key.
+		l.dev.ctl.Set(l.name("lockkey"), "force", 0)
+		if _, err := l.dev.ctl.Set(l.name("lockkey"), strconv.FormatUint(uint64(key), 10), 0); err != nil {
+			l.maskFail = true
+			return fmt.Errorf("%w: %v", ErrMaskUnavailable, err)
+		}
+		l.key.Store(key)
+	}
+	return l.Set("filter", filter)
+}
+
 // Retune sets the channel on a control lease (scanner use).
 func (l *Lease) Retune(channel string) error { return l.Set("channel", channel) }
 
@@ -478,6 +518,9 @@ func (l *Lease) Release() {
 		if l.src != nil {
 			l.src.Close()
 		}
+		l.mu.Lock()
+		l.released = true
+		l.mu.Unlock()
 		if l.unlocked {
 			l.releaseUnlocked()
 		} else {

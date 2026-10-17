@@ -57,6 +57,8 @@ type Channel struct {
 type Collector struct {
 	readers  map[uint16]*ts.SectionReader
 	want     [ts.PIDMax + 1]bool          // PIDs carrying guide data
+	wanted   ts.PIDSet                    // the same, as a set
+	wantNew  bool                         // wanted grew since WantedPIDs
 	channels map[uint16]*Channel          // by source id
 	events   map[uint16]map[uint16]*Event // source id -> event id
 	leap     int
@@ -69,12 +71,21 @@ func NewCollector() *Collector {
 		channels: map[uint16]*Channel{}, events: map[uint16]map[uint16]*Event{}, leap: defaultLeap,
 	}
 	c.want[BasePID] = true
+	c.wanted.Add(BasePID)
+	c.wantNew = true
 	return c
 }
 
 // Wants reports whether packets of this PID carry guide data.
 func (c *Collector) Wants(pid uint16) bool {
 	return c.want[pid&ts.PIDMax]
+}
+
+// WantedPIDs returns the PIDs that carry guide data and reports whether the
+// set has grown since the last call.
+func (c *Collector) WantedPIDs() (set ts.PIDSet, grown bool) {
+	grown, c.wantNew = c.wantNew, false
+	return c.wanted, grown
 }
 
 // Push consumes one packet.
@@ -138,7 +149,11 @@ func (c *Collector) mgt(b []byte) {
 		dl := be16(b[9:11]) & 0x0FFF
 		switch {
 		case (typ >= 0x0100 && typ <= 0x017F) || (typ >= 0x0200 && typ <= 0x027F):
-			c.want[pid] = true
+			if !c.want[pid] {
+				c.want[pid] = true
+				c.wanted.Add(pid)
+				c.wantNew = true
+			}
 		}
 		if len(b) < 11+dl {
 			return
