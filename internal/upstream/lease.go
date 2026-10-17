@@ -149,17 +149,17 @@ func (p *Pool) StatusOf(deviceID uint32, idx int) (Status, error) {
 func (p *Pool) start(ctx context.Context, dev *Device, idx int, req Request) (*Lease, error) {
 	l := &Lease{pool: p, dev: dev, idx: idx}
 	var err error
-	switch {
-	case req.Unlocked:
-		err = l.startPush(ctx, req, false)
-	case p.cfg.Mode == "http":
+	if p.cfg.Mode == "http" {
 		err = l.startHTTP(ctx, req)
-	default:
-		err = l.startPush(ctx, req, true)
+	} else {
+		err = l.startPush(ctx, req)
 	}
 	if err != nil {
 		l.once.Do(func() {}) // never release a lease that did not start
 		return nil, err
+	}
+	if req.Unlocked {
+		l.unlock(req.Frequency)
 	}
 	if req.Service {
 		p.setCap(tkey{dev.ID, idx}, capYes)
@@ -279,23 +279,11 @@ func (s *httpSource) Close()       { s.conn.Close() }
 
 // startPush locks the tuner over the control protocol, tunes it and has the
 // device push the stream to a local UDP port.
-func (l *Lease) startPush(ctx context.Context, req Request, lock bool) error {
-	if lock {
-		if err := l.lockControl(); err != nil {
-			return errInUse
-		}
-	} else if err := l.checkFree(); err != nil {
+func (l *Lease) startPush(ctx context.Context, req Request) error {
+	if err := l.lockControl(); err != nil {
 		return errInUse
 	}
-	l.unlocked, l.freq = !lock, req.Frequency
-	fail := func(err error) error {
-		if lock {
-			l.releaseControl()
-		} else {
-			l.releaseUnlocked()
-		}
-		return err
-	}
+	fail := func(err error) error { l.releaseControl(); return err }
 	channel := fmt.Sprintf("auto:%d", req.Frequency)
 	if req.Program == 0 {
 		if err := l.Set("filter", "0x0000-0x1FFF"); err != nil {
@@ -313,11 +301,11 @@ func (l *Lease) startPush(ctx context.Context, req Request, lock bool) error {
 			return fail(err)
 		}
 	}
-	rx, err := l.pool.newReceiver(l.dev, !lock)
+	rx, err := l.pool.newReceiver(l.dev)
 	if err != nil {
 		return fail(err)
 	}
-	l.src, l.target = rx, rx.Target()
+	l.src = rx
 	if err := l.Set("target", rx.Target()); err != nil {
 		rx.Close()
 		l.src = nil
@@ -360,10 +348,22 @@ func (l *Lease) checkFree() error {
 	return nil
 }
 
+// unlock drops the lock the device took for our stream (or we took for it)
+// but leaves the stream running. From then on anybody may take the tuner over;
+// Claimed tells when that has happened.
+func (l *Lease) unlock(freq uint64) {
+	l.dev.ctl.Set(l.name("lockkey"), "force", 0)
+	l.key = 0
+	l.unlocked, l.freq = true, freq
+	l.target, _ = l.Get("target")
+}
+
 // releaseUnlocked clears the tuner, but only if it is still ours: after a
-// takeover whatever the new user set up must be left alone.
+// takeover whatever the new user set up must be left alone. A stream we pull
+// over HTTP frees the tuner when our connection closes, so there is nothing
+// to clear.
 func (l *Lease) releaseUnlocked() {
-	if l.Claimed() {
+	if _, pulled := l.src.(*httpSource); pulled || l.Claimed() {
 		return
 	}
 	l.dev.ctl.Set(l.name("target"), "none", 0)
@@ -521,7 +521,7 @@ type Receiver struct {
 	lost    uint64
 }
 
-func (p *Pool) newReceiver(dev *Device, forceRTP bool) (*Receiver, error) {
+func (p *Pool) newReceiver(dev *Device) (*Receiver, error) {
 	local := net.ParseIP(p.cfg.LocalIP)
 	if local == nil {
 		c, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: dev.IP, Port: dev.Port})
@@ -536,13 +536,12 @@ func (p *Pool) newReceiver(dev *Device, forceRTP bool) (*Receiver, error) {
 		return nil, err
 	}
 	conn.SetReadBuffer(8 << 20)
-	rtp := forceRTP || p.cfg.Mode == "rtp"
 	scheme := "udp"
-	if rtp {
+	if p.cfg.Mode == "rtp" {
 		scheme = "rtp"
 	}
 	return &Receiver{
-		conn: conn, rtp: rtp,
+		conn: conn, rtp: p.cfg.Mode == "rtp",
 		target: fmt.Sprintf("%s://%s", scheme, conn.LocalAddr().String()),
 	}, nil
 }

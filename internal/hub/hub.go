@@ -62,8 +62,7 @@ type Options struct {
 	// up as soon as anyone else needs its tuner.
 	Background bool
 	// Unlocked (with Background) listens without holding the tuner's lock, so
-	// that anyone else can take it: the stream just ends when they do. Needs
-	// the device to reach this host over UDP.
+	// that anyone else can take it: the stream just ends when they do.
 	Unlocked bool
 	// Pin makes the stream use physical tuner number Tuner (virtual tuner N
 	// is physical tuner N). Without it the pool picks any suitable tuner.

@@ -76,6 +76,7 @@ type tuner struct {
 	vchannel string
 	cancel   chan struct{}
 	pkts     atomic.Uint64
+	session  *int // the HTTP session that owns the tuner, if any
 }
 
 // Start launches the device on 127.0.0.1 with the same (random) port for

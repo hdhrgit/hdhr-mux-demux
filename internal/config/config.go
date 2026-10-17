@@ -67,7 +67,7 @@ type Guide struct {
 	Hold       Duration `json:"hold"`        // time spent on each multiplex (default 45s)
 	Parallel   int      `json:"parallel"`    // multiplexes listened to at once (default 3)
 	StartDelay Duration `json:"start_delay"` // wait after start-up (default 90s)
-	// Unlocked listens without locking the tuner so others can take it over; needs UDP from the devices to this host.
+	// Unlocked drops the tuner's lock while listening so others can take it over.
 	Unlocked bool `json:"unlocked"`
 }
 

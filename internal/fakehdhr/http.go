@@ -167,6 +167,8 @@ func (d *Device) serveHTTPStream(w http.ResponseWriter, r *http.Request) {
 	t.lockkey, t.lockIP, t.target = 0xFFFFFFFE, host, "http://"+r.RemoteAddr
 	cancel := make(chan struct{})
 	t.cancel = cancel
+	mine := new(int)
+	t.session = mine
 	n := 0
 	for _, o := range d.tuners {
 		if o.cancel != nil {
@@ -184,7 +186,10 @@ func (d *Device) serveHTTPStream(w http.ResponseWriter, r *http.Request) {
 		if t.cancel == cancel {
 			t.cancel = nil
 		}
-		t.channel, t.freq, t.lockkey, t.lockIP, t.target = "none", 0, 0, "", "none"
+		if t.session == mine { // not if somebody took the tuner over meanwhile
+			t.session = nil
+			t.channel, t.freq, t.lockkey, t.lockIP, t.target = "none", 0, 0, "", "none"
+		}
 		d.mu.Unlock()
 	}()
 

@@ -135,13 +135,13 @@ channels 12-48 h, and the big networks' stations about 1.5 to 3 days (the longes
 client that reads the guide hourly therefore always has several hours in hand; the near
 term is refreshed by the passes and by any running stream, the far end only changes slowly.
 
-**Unlocked passes.** By default a pass pulls over HTTP, so the device locks the tuner for the
-duration. With `guide.unlocked: true` it instead tunes without a lock and has the device push
-RTP to this host: any other application may then take the tuner at any moment (checked on
-real devices: its HTTP request succeeds), the pass notices within a second, lets go without
-touching what the new user set up, and carries on with the next multiplex when a tuner is
-free. This needs the devices to reach this host over UDP, so it does not work through Docker
-NAT (host networking is fine).
+**Unlocked passes.** While a pass listens, the device holds the tuner locked for the HTTP
+stream, so another application asking for that tuner is told it is in use. With
+`guide.unlocked: true` the pass drops that lock as soon as the stream runs (`lockkey force`, the
+stream keeps flowing). Anyone may then take the tuner (checked on real devices: their request
+succeeds and our stream stops), the pass notices within a second, lets go without touching what
+the new user set up, and carries on with the next multiplex when a tuner is free. It still pulls
+over HTTP, so it works through Docker NAT.
 
 Limits: ATSC 3.0 services carry no PSIP, so they have no guide; Huffman-compressed text (rare)
 is not decoded; the broadcasts usually cover a day or two ahead.

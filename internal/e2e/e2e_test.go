@@ -1822,7 +1822,8 @@ func TestUnlockedGuidePassYieldsToOutsiders(t *testing.T) {
 	}()
 	waitFor(t, "pass listening without a lock", 5*time.Second, func() bool {
 		tg, _ := raw.Get("/tuner0/target")
-		return strings.HasPrefix(tg, "rtp://")
+		lk, _ := raw.Get("/tuner0/lockkey")
+		return strings.HasPrefix(tg, "http://") && lk == "none"
 	})
 	if lk, _ := raw.Get("/tuner0/lockkey"); lk != "none" {
 		t.Fatalf("the guide pass holds a lock (%q)", lk)

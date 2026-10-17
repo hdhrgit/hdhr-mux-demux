@@ -504,9 +504,8 @@ type Request struct {
 	Tuner int
 	// Skip lists tuners ("DEVICEID/N") not to use.
 	Skip map[string]bool
-	// Unlocked opens the tuner without a lock, pushing the stream over RTP to
-	// this host. Anybody may then take the tuner over; see Lease.Claimed. It
-	// needs the device to be able to reach this host over UDP.
+	// Unlocked drops the tuner's lock once the stream runs, so anybody may take
+	// the tuner over; see Lease.Claimed.
 	Unlocked bool
 }
 

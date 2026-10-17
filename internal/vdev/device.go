@@ -50,8 +50,7 @@ type Config struct {
 	GuideParallel   int
 	GuideStartDelay time.Duration
 	// GuideUnlocked makes the guide passes listen without locking the tuner,
-	// so anyone else (an external DVR) can take it at any moment. The device
-	// must reach this host over UDP (not through Docker NAT).
+	// so anyone else (an external DVR) can take it at any moment.
 	GuideUnlocked bool
 	// ScanTuners limits how many tuners of each device a scan uses (0 = every
 	// free one, like a real device's own scan; viewers are never evicted).
