@@ -13,6 +13,7 @@ import (
 
 	"hdhrmux/internal/chanmap"
 	"hdhrmux/internal/lineup"
+	"hdhrmux/internal/psip"
 	"hdhrmux/internal/ts"
 	"hdhrmux/internal/upstream"
 )
@@ -33,6 +34,7 @@ type Hub struct {
 
 	mu       sync.Mutex
 	streams  map[string]*stream
+	guide    func(psip.Guide)         // receives the programme guide found in streams
 	learner  func([]lineup.Entry)     // told what streams and probes reveal about channels
 	learning map[string]chan struct{} // virtual channels being probed right now
 	service  map[uint64]bool          // RF channels known to be ATSC 3.0 (one device-selected service per tuner)
@@ -56,6 +58,9 @@ type Options struct {
 	// Service hints that the channel is ATSC 3.0 (known from a scan), which
 	// avoids tuning a physical tuner just to discover that.
 	Service bool
+	// Background marks a stream opened only to collect the guide: it is given
+	// up as soon as anyone else needs its tuner.
+	Background bool
 	// Pin makes the stream use physical tuner number Tuner (virtual tuner N
 	// is physical tuner N). Without it the pool picks any suitable tuner.
 	Pin   bool
@@ -161,6 +166,8 @@ func (h *Hub) subscribe(ctx context.Context, spec chanmap.Spec, o Options) (*Sub
 	creator := st == nil
 	if creator {
 		st = newStream(h, spec, base, key, service, program, o.Program, tuner)
+		st.background = o.Background
+		st.idleSince = time.Now()
 		h.streams[key] = st
 	}
 	st.refs++
@@ -231,7 +238,8 @@ func (h *Hub) reclaim(accept func(*upstream.Lease) bool) bool {
 	h.mu.Lock()
 	var victim *stream
 	for _, st := range h.streams {
-		if st.refs > 0 || st.dead || st.idleTimer == nil {
+		lingering := st.refs == 0 && st.idleTimer != nil
+		if st.dead || !(lingering || (st.background && st.refs <= 1)) {
 			continue
 		}
 		l := st.currentLease()
@@ -247,7 +255,9 @@ func (h *Hub) reclaim(accept func(*upstream.Lease) bool) bool {
 		return false
 	}
 	victim.dead = true
-	victim.idleTimer.Stop()
+	if victim.idleTimer != nil {
+		victim.idleTimer.Stop()
+	}
 	delete(h.streams, victim.key)
 	h.mu.Unlock()
 	log.Printf("hub: giving up idle channel %s to make room", victim.key)
@@ -516,6 +526,43 @@ func (s *Sub) Key() string { return s.st.key }
 // each service is delivered by its own physical tuner.
 func (s *Sub) NeedsRetarget(program uint16) bool {
 	return s.st.h.isService(s.st.spec.Frequency) && program != s.st.program
+}
+
+// GuideInterval is how often a running stream hands over guide data it has
+// collected since the last time.
+var GuideInterval = 10 * time.Second
+
+// SetGuideSink registers the function that receives the programme guide
+// found in the PSIP tables of running streams.
+func (h *Hub) SetGuideSink(f func(psip.Guide)) {
+	h.mu.Lock()
+	h.guide = f
+	h.mu.Unlock()
+}
+
+func (h *Hub) publishGuide(g psip.Guide) {
+	h.mu.Lock()
+	f := h.guide
+	h.mu.Unlock()
+	if f != nil {
+		f(g)
+	}
+}
+
+// CollectGuide tunes a multiplex on any free tuner and listens to its guide
+// tables for hold. It gives the tuner up at once if someone else needs it.
+func (h *Hub) CollectGuide(ctx context.Context, spec chanmap.Spec, hold time.Duration) error {
+	sub, err := h.Subscribe(ctx, spec, Options{Background: true})
+	if err != nil {
+		return err
+	}
+	defer sub.Close()
+	select {
+	case <-time.After(hold):
+	case <-sub.st.stop: // taken away
+	case <-ctx.Done():
+	}
+	return nil
 }
 
 // SetLearner registers the function that is told which RF channel, program

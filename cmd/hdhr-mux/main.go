@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"hdhrmux/internal/config"
+	"hdhrmux/internal/guide"
 	"hdhrmux/internal/hdhrproto"
 	"hdhrmux/internal/hub"
 	"hdhrmux/internal/lineup"
@@ -93,6 +94,13 @@ func main() {
 	h := hub.New(pool, hub.Config{Linger: linger, ClientBuffer: cfg.ClientBufferMB << 20})
 	defer h.Close()
 
+	guideRefresh := time.Duration(cfg.Guide.Refresh)
+	if guideRefresh == 0 {
+		guideRefresh = 6 * time.Hour
+	}
+	if guideRefresh < 0 {
+		guideRefresh = 0
+	}
 	refresh := time.Duration(cfg.Lineup.Refresh)
 	if refresh == 0 {
 		refresh = 10 * time.Minute
@@ -101,30 +109,40 @@ func main() {
 		refresh = 0
 	}
 	dev, err := vdev.New(vdev.Config{
-		DeviceID:      id,
-		FriendlyName:  cfg.FriendlyName,
-		ModelNumber:   cfg.ModelNumber,
-		Manufacturer:  cfg.Manufacturer,
-		Tuners:        tuners,
-		ChannelMap:    cfg.Lineup.ChannelMap,
-		Sources:       cfg.Lineup.Sources,
-		DefaultSource: cfg.Lineup.DefaultSource,
-		ScanFrom:      cfg.Lineup.ScanFrom,
-		ScanTo:        cfg.Lineup.ScanTo,
-		ScanTuners:    cfg.Lineup.ScanTuners,
-		LineupRefresh: refresh,
-		HTTPAddr:      cfg.HTTPListen,
-		ControlAddr:   cfg.ControlListen,
-		StreamAddr:    cfg.StreamListen,
-		AdvertiseHost: cfg.AdvertiseHost,
-		SSDP:          *cfg.SSDP,
-		Hidden:        !*cfg.Discoverable,
-		LogRequests:   cfg.LogRequests,
-		IdleRelease:   time.Duration(cfg.IdleRelease),
+		DeviceID:        id,
+		FriendlyName:    cfg.FriendlyName,
+		ModelNumber:     cfg.ModelNumber,
+		Manufacturer:    cfg.Manufacturer,
+		Tuners:          tuners,
+		ChannelMap:      cfg.Lineup.ChannelMap,
+		Sources:         cfg.Lineup.Sources,
+		DefaultSource:   cfg.Lineup.DefaultSource,
+		ScanFrom:        cfg.Lineup.ScanFrom,
+		ScanTo:          cfg.Lineup.ScanTo,
+		ScanTuners:      cfg.Lineup.ScanTuners,
+		LineupRefresh:   refresh,
+		GuideRefresh:    guideRefresh,
+		GuideHold:       time.Duration(cfg.Guide.Hold),
+		GuideParallel:   cfg.Guide.Parallel,
+		GuideStartDelay: time.Duration(cfg.Guide.StartDelay),
+		HTTPAddr:        cfg.HTTPListen,
+		ControlAddr:     cfg.ControlListen,
+		StreamAddr:      cfg.StreamListen,
+		AdvertiseHost:   cfg.AdvertiseHost,
+		SSDP:            *cfg.SSDP,
+		Hidden:          !*cfg.Discoverable,
+		LogRequests:     cfg.LogRequests,
+		IdleRelease:     time.Duration(cfg.IdleRelease),
 	}, h, lu)
 	if err != nil {
 		log.Fatal(err)
 	}
+	gs, err := guide.Open(filepath.Join(cfg.StateDir, "epg.json"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer gs.Flush()
+	dev.SetGuide(gs)
 	if err := dev.Start(); err != nil {
 		log.Fatal(err)
 	}

@@ -25,6 +25,12 @@
     "refresh": "10m"
   },
 
+  "guide": {
+    "refresh": "6h",
+    "hold": "45s",
+    "parallel": 3
+  },
+
   "linger": "5s",
   "client_buffer_mb": 16,
   "idle_release": "60s"

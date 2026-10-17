@@ -89,6 +89,7 @@ still share one) and the multiplexer does no demuxing there.
 | Port 80: `discover.json`, `lineup.json`, `lineup.xml`, `lineup_status.json`, `lineup.post?scan=…`, `status.json`, `device.xml`, `tuners.html` (every tuner with its channels, clients and their IPs), `lineup.html` | yes |
 | Port 5004: `/auto/vX.Y`, `/tunerN/vX.Y`, `/auto/chFREQ[-PROGRAM]`, `?duration=`, real error headers (`801`, `804`–`807`) | yes |
 | DLNA/UPnP media server on `/dms` (SSDP announcements and search answers, `device.xml`, ContentDirectory with the `Favorites` and `Channels` containers, ConnectionManager), so TVs list the multiplexer as a video source and play its channels | yes (default interface only) |
+| Programme guide from the broadcasts (PSIP), XMLTV on `/epg`, JSON on `/epg.json` | yes (ATSC 1.0 only) |
 | Lineup from the devices' own lineups, RF locations learned from streams / first use; explicit scan (`us-bcast`, `us-cable`, `us-hrc`, ATSC 1.0 and 3.0) | yes |
 | `/lineup/scan` control variable (`get` → `state=… progress=…% found=…`, `set start` / `abort`) | yes |
 | Transcoding, other channel maps, firmware upgrade, DVR/storage | no |
@@ -110,6 +111,26 @@ sharing needs. That is learned, and remembered in `<state_dir>/lineup.json`:
   the first time a multiplex is used. If the first device does not know the channel
   the others are asked. Concurrent requests share one probe.
 * **From an explicit scan** (below), which locates everything at once.
+
+### Programme guide (`/epg`)
+
+ATSC 1.0 stations broadcast their schedule in every multiplex (PSIP: channel table, event
+titles and times, descriptions). The multiplexer reads it from the streams it already pulls:
+
+* **From running streams.** Any stream of a whole multiplex hands over the guide of every
+  channel on it every few seconds, so watching one channel updates its neighbours.
+* **From a pass over the idle multiplexes.** After start-up (90 s) and then every
+  `guide.refresh` (default 6 h) it listens to each ATSC 1.0 multiplex in the lineup for
+  `guide.hold` (45 s), `guide.parallel` (3) at a time, on spare tuners. A pass never keeps a
+  tuner from a viewer: it gives it up at once. `POST /epg/refresh` starts one now.
+
+It is served as **XMLTV** on `/epg` (also `/epg.xml`) and as JSON on `/epg.json`, for the
+channels of the lineup. Options: `?hours=N` ahead (default 72), `?channel=7.1` (repeatable),
+`?all=1` to list channels without a guide. XMLTV channel ids are the guide numbers (`7.1`);
+times are UTC. The guide is kept in `<state_dir>/epg.json`.
+
+Limits: ATSC 3.0 services carry no PSIP, so they have no guide; Huffman-compressed text (rare)
+is not decoded; the broadcasts usually cover a day or two ahead.
 
 ### Scan (explicit only)
 

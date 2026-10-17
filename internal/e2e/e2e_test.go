@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net"
@@ -15,6 +16,7 @@ import (
 
 	"hdhrmux/internal/chanmap"
 	"hdhrmux/internal/fakehdhr"
+	"hdhrmux/internal/guide"
 	"hdhrmux/internal/hdhrproto"
 	"hdhrmux/internal/hub"
 	"hdhrmux/internal/lineup"
@@ -22,6 +24,8 @@ import (
 	"hdhrmux/internal/upstream"
 	"hdhrmux/internal/vdev"
 )
+
+func init() { hub.GuideInterval = 200 * time.Millisecond } // streams hand over their guide quickly
 
 var channels = []fakehdhr.Channel{
 	{Frequency: 177000000, TSID: 1, Programs: []fakehdhr.Program{{Number: 1, VChannel: "7.1", Name: "ALPHA"}, {Number: 2, VChannel: "7.2", Name: "BETA"}}},
@@ -105,6 +109,7 @@ func setup(t *testing.T, physTuners []int, virtual int, mod func(*vdev.Config)) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	e.dev.SetGuide(func() *guide.Store { g, _ := guide.Open(""); return g }())
 	if err := e.dev.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -1670,5 +1675,133 @@ func TestDLNAMediaServer(t *testing.T) {
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil || resp.StatusCode != 200 || !strings.HasPrefix(resp.Header.Get("SID"), "uuid:") {
 		t.Fatalf("SUBSCRIBE: %v %v", resp, err)
+	}
+}
+
+type xmltv struct {
+	Channels []struct {
+		ID    string   `xml:"id,attr"`
+		Names []string `xml:"display-name"`
+	} `xml:"channel"`
+	Programmes []struct {
+		Start   string `xml:"start,attr"`
+		Stop    string `xml:"stop,attr"`
+		Channel string `xml:"channel,attr"`
+		Title   string `xml:"title"`
+		Desc    string `xml:"desc"`
+	} `xml:"programme"`
+}
+
+func fetchEPG(t *testing.T, e *env, query string) xmltv {
+	t.Helper()
+	resp, err := http.Get(e.api + "/epg" + query)
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("GET /epg: %v %v", resp, err)
+	}
+	defer resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "xml") {
+		t.Fatalf("content type %q", ct)
+	}
+	var x xmltv
+	if err := xml.NewDecoder(resp.Body).Decode(&x); err != nil {
+		t.Fatalf("XMLTV does not parse: %v", err)
+	}
+	return x
+}
+
+// Watching a channel collects the guide of its whole multiplex, and /epg
+// serves it as XMLTV (and JSON).
+func TestGuideFromRunningStream(t *testing.T) {
+	e := setup(t, []int{2}, 2, nil)
+	if x := fetchEPG(t, e, ""); len(x.Programmes) != 0 {
+		t.Fatalf("a guide before anything was heard: %+v", x.Programmes)
+	}
+	c, _ := e.open("/auto/v7.1")
+	defer c.close()
+	c.read(t, 188*50)
+	waitFor(t, "guide collected from the stream", 10*time.Second, func() bool {
+		return len(fetchEPG(t, e, "?channel=7.2").Programmes) >= 2
+	})
+
+	x := fetchEPG(t, e, "")
+	titles := map[string]string{}
+	descs := map[string]string{}
+	for _, p := range x.Programmes {
+		titles[p.Channel+"/"+p.Title] = p.Start
+		descs[p.Channel+"/"+p.Title] = p.Desc
+		if p.Start >= p.Stop || !strings.HasSuffix(p.Start, " +0000") {
+			t.Errorf("bad times %q-%q", p.Start, p.Stop)
+		}
+	}
+	for _, want := range []string{"7.1/Now Show ALPHA", "7.1/Next Show ALPHA", "7.2/Now Show BETA"} {
+		if _, ok := titles[want]; !ok {
+			t.Errorf("missing %q in %v", want, titles)
+		}
+	}
+	if descs["7.2/Now Show BETA"] != "About Now Show BETA" {
+		t.Errorf("description %q", descs["7.2/Now Show BETA"])
+	}
+	if len(x.Channels) < 2 || x.Channels[0].ID != "7.1" || len(x.Channels[0].Names) != 3 || x.Channels[0].Names[0] != "7.1 ALPHA" {
+		t.Errorf("channels %+v", x.Channels)
+	}
+	for _, p := range fetchEPG(t, e, "?channel=7.2").Programmes {
+		if p.Channel != "7.2" {
+			t.Errorf("channel filter leaked %q", p.Channel)
+		}
+	}
+	for _, p := range x.Programmes {
+		if p.Channel == "14.1" {
+			t.Error("a multiplex nobody listened to has no guide yet")
+		}
+	}
+	var js []map[string]any
+	getJSON(t, e.api+"/epg.json?channel=7.1", &js)
+	if len(js) != 1 || js[0]["GuideNumber"] != "7.1" || len(js[0]["Events"].([]any)) < 2 {
+		t.Fatalf("epg.json: %v", js)
+	}
+}
+
+// A pass listens to the multiplexes nobody is watching, using spare tuners,
+// and a viewer who needs the tuner gets it at once.
+func TestGuidePassAndYielding(t *testing.T) {
+	e := setup(t, []int{1}, 2, func(c *vdev.Config) { c.GuideHold = 4 * time.Second })
+	e.lu.Replace(append(append([]lineup.Entry{}, testLineup...), atsc3Lineup...))
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if n, total, err := e.dev.GuidePass(context.Background()); err != nil || n != 2 || total != 2 {
+			t.Errorf("pass: %d/%d %v (the ATSC 3.0 channel has no PSIP and is not visited)", n, total, err)
+		}
+	}()
+	time.Sleep(700 * time.Millisecond)
+	// the single tuner is held by the pass; a viewer must not have to wait for it
+	began := time.Now()
+	c, resp := e.open("/auto/v14.1")
+	if c == nil {
+		t.Fatalf("viewer refused during a guide pass: %d %v", resp.StatusCode, resp.Header)
+	}
+	c.read(t, 188*50)
+	if d := time.Since(began); d > 1500*time.Millisecond {
+		t.Fatalf("viewer waited %v for the guide pass", d)
+	}
+	c.close()
+	<-done
+
+	got := fetchEPG(t, e, "")
+	seen := map[string]bool{}
+	for _, p := range got.Programmes {
+		seen[p.Channel] = true
+	}
+	for _, ch := range []string{"7.1", "7.2", "14.1", "14.3"} {
+		if !seen[ch] {
+			t.Errorf("no guide for %s after the pass (have %v)", ch, seen)
+		}
+	}
+	if seen["104.1"] {
+		t.Error("ATSC 3.0 services carry no PSIP guide")
+	}
+	if resp, err := http.Post(e.api+"/epg/refresh", "", nil); err != nil || resp.StatusCode != 202 {
+		t.Fatalf("POST /epg/refresh: %v %v", resp, err)
 	}
 }

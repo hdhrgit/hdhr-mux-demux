@@ -312,3 +312,28 @@ func PacketizeSection(pid uint16, cc byte, sec []byte) []byte {
 	copy(p[5:], sec)
 	return p
 }
+
+// Packetize wraps a section of any length into transport stream packets on
+// pid, advancing the continuity counter *cc as it goes.
+func Packetize(pid uint16, cc *byte, sec []byte) [][]byte {
+	data := append([]byte{0}, sec...) // pointer_field = 0
+	var out [][]byte
+	for first := true; len(data) > 0; first = false {
+		p := make([]byte, PacketSize)
+		for i := range p {
+			p[i] = 0xFF
+		}
+		p[0] = SyncByte
+		p[1] = byte(pid >> 8)
+		if first {
+			p[1] |= 0x40
+		}
+		p[2] = byte(pid)
+		p[3] = 0x10 | *cc&0x0F
+		*cc = (*cc + 1) & 0x0F
+		n := copy(p[4:], data)
+		data = data[n:]
+		out = append(out, p)
+	}
+	return out
+}

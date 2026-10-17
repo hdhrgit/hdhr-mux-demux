@@ -40,6 +40,15 @@ type Config struct {
 	// LineupRefresh is how often the devices' own lineups are re-read (0 =
 	// only when asked, e.g. by a rescan).
 	LineupRefresh time.Duration
+	// GuideRefresh is how often the guide of multiplexes nobody is watching is
+	// refreshed with spare tuners (0 = never; guides still come from running
+	// streams). GuideHold is how long each multiplex is listened to (default
+	// 45 s), GuideParallel how many are listened to at once (default 3) and
+	// GuideStartDelay the wait after start-up before the first pass (90 s).
+	GuideRefresh    time.Duration
+	GuideHold       time.Duration
+	GuideParallel   int
+	GuideStartDelay time.Duration
 	// ScanTuners limits how many tuners of each device a scan uses (0 = every
 	// free one, like a real device's own scan; viewers are never evicted).
 	ScanTuners int
@@ -135,6 +144,8 @@ type Device struct {
 	scanFound int
 	source    string
 
+	guide guideState
+
 	quit chan struct{}
 	wg   sync.WaitGroup
 }
@@ -201,6 +212,10 @@ func (d *Device) Start() error {
 	if d.cfg.LineupRefresh > 0 {
 		d.wg.Add(1)
 		go d.lineupLoop()
+	}
+	if d.cfg.GuideRefresh > 0 {
+		d.wg.Add(1)
+		go d.guideLoop()
 	}
 	if d.cfg.SSDP && !d.cfg.Hidden {
 		d.ssdp = newSSDP(d)

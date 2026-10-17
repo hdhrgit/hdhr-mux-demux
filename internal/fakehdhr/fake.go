@@ -17,6 +17,7 @@ import (
 
 	"hdhrmux/internal/chanmap"
 	"hdhrmux/internal/hdhrproto"
+	"hdhrmux/internal/psip"
 	"hdhrmux/internal/ts"
 )
 
@@ -478,6 +479,11 @@ func (d *Device) stream(t *tuner, ch *Channel, conn io.Writer, rtp bool, filter 
 	next := func(pid uint16) byte { c := cc[pid]; cc[pid] = (c + 1) & 15; return c }
 
 	patSec := patBuild(ch)
+	var guideSecs []psipSection
+	if !ch.ATSC3 { // ATSC 3.0 service streams carry no PSIP
+		guideSecs = psipSections(ch)
+	}
+	guideCC := map[uint16]*byte{}
 	var progs [][2]uint16
 	var pmts [][]byte
 	for i, p := range ch.Programs {
@@ -542,6 +548,17 @@ func (d *Device) stream(t *tuner, ch *Channel, conn io.Writer, rtp bool, filter 
 			switch {
 			case n%40 == 0:
 				emit(ts.PacketizeSection(ts.PIDPAT, next(ts.PIDPAT), patSec))
+			case n%250 == 3 && len(guideSecs) > 0:
+				for _, g := range guideSecs {
+					cc := guideCC[g.pid]
+					if cc == nil {
+						cc = new(byte)
+						guideCC[g.pid] = cc
+					}
+					for _, p := range ts.Packetize(g.pid, cc, g.sec) {
+						emit(p)
+					}
+				}
 			case n%40 == 1:
 				for k := range pmts {
 					pid, _, _ := ProgramPIDs(k)
@@ -571,6 +588,41 @@ func (d *Device) stream(t *tuner, ch *Channel, conn io.Writer, rtp bool, filter 
 		}
 		flush()
 	}
+}
+
+type psipSection struct {
+	pid uint16
+	sec []byte
+}
+
+// psipSections builds the programme guide a station would broadcast for the
+// channel: every program gets a running and a following event, with text.
+func psipSections(ch *Channel) []psipSection {
+	now := time.Now().Truncate(30 * time.Minute)
+	var chans []psip.Channel
+	var eits, etts []psipSection
+	for i, p := range ch.Programs {
+		maj, min, _ := strings.Cut(p.VChannel, ".")
+		major, _ := strconv.Atoi(maj)
+		minor, _ := strconv.Atoi(min)
+		src := uint16(i + 1)
+		chans = append(chans, psip.Channel{Name: p.Name, Major: uint16(major), Minor: uint16(minor), TSID: ch.TSID, Program: p.Number, SourceID: src})
+		evs := []psip.Event{
+			{ID: 1, Start: now.Add(-30 * time.Minute), Duration: time.Hour, Title: "Now Show " + p.Name, Language: "eng"},
+			{ID: 2, Start: now.Add(30 * time.Minute), Duration: time.Hour, Title: "Next Show " + p.Name, Language: "eng"},
+		}
+		eits = append(eits, psipSection{0x1D00, psip.BuildEIT(src, evs, 18)})
+		for _, e := range evs {
+			etts = append(etts, psipSection{0x1E00, psip.BuildETT(src, e.ID, "eng", "About "+e.Title)})
+		}
+	}
+	out := []psipSection{
+		{psip.BasePID, psip.BuildMGT([]uint16{0x1D00}, []uint16{0x1E00})},
+		{psip.BasePID, psip.BuildVCT(ch.TSID, chans)},
+		{psip.BasePID, psip.BuildSTT(time.Now(), 18)},
+	}
+	out = append(out, eits...)
+	return append(out, etts...)
 }
 
 func patBuild(ch *Channel) []byte {

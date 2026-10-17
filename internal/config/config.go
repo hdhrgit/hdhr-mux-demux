@@ -53,10 +53,20 @@ type Config struct {
 	Upstream Upstream `json:"upstream"`
 	Lineup   Lineup   `json:"lineup"`
 
+	Guide Guide `json:"guide"`
+
 	Linger Duration `json:"linger"` // keep an unused physical tuner tuned this long (default 5s, -1s disables)
 	// ClientBufferMB is the per-client queue for slow consumers (default 16).
 	ClientBufferMB int      `json:"client_buffer_mb"`
 	IdleRelease    Duration `json:"idle_release"` // free tuners left tuned without a viewer
+}
+
+// Guide controls the programme guide collected from the broadcasts.
+type Guide struct {
+	Refresh    Duration `json:"refresh"`     // how often idle multiplexes are listened to (default 6h, -1s = never)
+	Hold       Duration `json:"hold"`        // time spent on each multiplex (default 45s)
+	Parallel   int      `json:"parallel"`    // multiplexes listened to at once (default 3)
+	StartDelay Duration `json:"start_delay"` // wait after start-up (default 90s)
 }
 
 type Upstream struct {

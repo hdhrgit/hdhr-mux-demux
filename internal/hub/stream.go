@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"hdhrmux/internal/chanmap"
+	"hdhrmux/internal/psip"
 	"hdhrmux/internal/ts"
 	"hdhrmux/internal/upstream"
 )
@@ -35,7 +36,12 @@ type stream struct {
 	program uint16
 	req     uint16
 	base    string // what the stream carries (RF channel [/service])
-	tuner   int    // physical tuner it is pinned to, -1 for any
+	// background streams exist only to collect the guide; they give way to
+	// anyone who needs the tuner.
+	background bool
+	collector  *psip.Collector // PSIP guide tables (whole-multiplex streams only)
+	lastGuide  time.Time
+	tuner      int // physical tuner it is pinned to, -1 for any
 
 	broken chan struct{} // the source failed; wakes the monitor
 
@@ -93,6 +99,9 @@ func newStream(h *Hub, spec chanmap.Spec, base, key string, service bool, progra
 	empty := []*Sub{}
 	st.subs.Store(&empty)
 	st.isPSI[ts.PIDPAT] = true
+	if !service {
+		st.collector = psip.NewCollector()
+	}
 	return st
 }
 
@@ -166,6 +175,7 @@ func (st *stream) shutdown() {
 
 func (st *stream) reader() {
 	defer st.wg.Done()
+	defer st.publishGuide(true)
 	buf := make([]byte, 64*1024)
 	var tail []byte // partial packet carried over to the next read (HTTP)
 	var join []byte
@@ -209,6 +219,19 @@ func (st *stream) reader() {
 			b = join
 		}
 		tail = append(tail[:0], st.process(b)...)
+		st.publishGuide(false)
+	}
+}
+
+// publishGuide hands the guide collected so far to the hub, at most every
+// GuideInterval unless forced. Called from the reader goroutine only.
+func (st *stream) publishGuide(force bool) {
+	if st.collector == nil || (!force && time.Since(st.lastGuide) < GuideInterval) {
+		return
+	}
+	st.lastGuide = time.Now()
+	if st.collector.Changed() {
+		st.h.publishGuide(st.collector.Snapshot())
 	}
 }
 
@@ -232,6 +255,9 @@ func (st *stream) process(b []byte) []byte {
 		if st.isPSI[pid] {
 			st.handlePSI(pid, p)
 			subs = *st.subs.Load()
+		}
+		if st.collector != nil && st.collector.Wants(pid) {
+			st.collector.Push(pid, p)
 		}
 		for _, s := range subs {
 			s.offer(p, pid)
