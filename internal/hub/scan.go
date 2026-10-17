@@ -283,7 +283,8 @@ func scanChannel(ctx context.Context, lease *upstream.Lease, cfg ScanConfig, ch 
 	var info, prev string
 	for {
 		v, err := lease.Get("streaminfo")
-		if err == nil && strings.Contains(v, "tsid=") && strings.Contains(v, ":") {
+		// Some multiplexes never report a tsid, so a program line is what counts.
+		if err == nil && strings.Contains(v, ":") {
 			info = v
 			if v == prev {
 				break
@@ -328,8 +329,12 @@ func ParseStreamInfo(info string, freq uint64, modulation, source string) []line
 		name := strings.Join(fields[1:], " ")
 		e := lineup.Entry{GuideNumber: vch, Frequency: freq, Program: uint16(prog), Modulation: modulation, Source: source}
 		switch {
-		case strings.HasSuffix(name, "(control)"), strings.HasSuffix(name, "(no data)"):
+		case strings.HasSuffix(name, "(control)"):
 			continue
+		case strings.HasSuffix(name, "(no data)"):
+			// Low-rate subchannels that happen to be silent at that moment;
+			// the devices' own lineups keep them and they stream fine.
+			name = strings.TrimSpace(strings.TrimSuffix(name, "(no data)"))
 		case strings.HasSuffix(name, "(encrypted)"):
 			e.DRM = true
 			name = strings.TrimSpace(strings.TrimSuffix(name, "(encrypted)"))
