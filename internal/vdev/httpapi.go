@@ -32,7 +32,7 @@ func (d *Device) routes() http.Handler {
 	mux.HandleFunc("GET /lineup_status.json", d.handleLineupStatus)
 	mux.HandleFunc("POST /lineup.post", d.handleLineupPost)
 	mux.HandleFunc("GET /lineup.post", d.handleLineupPost)
-	mux.HandleFunc("GET /device.xml", d.handleDeviceXML)
+	d.dmsRoutes(mux)
 	mux.HandleFunc("GET /status.json", d.handleStatus)
 	mux.HandleFunc("GET /tuners.html", d.handleTunersHTML)
 	mux.HandleFunc("GET /lineup.html", d.handleLineupHTML)
@@ -191,28 +191,6 @@ func (d *Device) handleLineupPost(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(http.StatusOK)
-}
-
-func (d *Device) handleDeviceXML(w http.ResponseWriter, r *http.Request) {
-	base := d.requestBase(r)
-	w.Header().Set("Content-Type", "text/xml")
-	fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
-<root xmlns="urn:schemas-upnp-org:device-1-0">
-	<specVersion><major>1</major><minor>0</minor></specVersion>
-	<URLBase>%s</URLBase>
-	<device>
-		<deviceType>urn:schemas-upnp-org:device:MediaServer:1</deviceType>
-		<friendlyName>%s</friendlyName>
-		<manufacturer>%s</manufacturer>
-		<modelName>%s</modelName>
-		<modelNumber>%s</modelNumber>
-		<serialNumber>%s</serialNumber>
-		<UDN>uuid:%s</UDN>
-	</device>
-</root>
-`, html.EscapeString(base), html.EscapeString(d.cfg.FriendlyName), html.EscapeString(d.cfg.Manufacturer),
-		html.EscapeString(d.cfg.ModelNumber), html.EscapeString(d.cfg.ModelNumber),
-		hdhrproto.FormatDeviceID(d.cfg.DeviceID), d.uuid())
 }
 
 func (d *Device) uuid() string {

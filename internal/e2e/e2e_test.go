@@ -1559,3 +1559,116 @@ func TestNotDiscoverable(t *testing.T) {
 	var dj map[string]any
 	getJSON(t, e.api+"/discover.json", &dj)
 }
+
+func soapCall(t *testing.T, base, path, service, action, args string) (int, string) {
+	t.Helper()
+	body := `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:` +
+		action + ` xmlns:u="` + service + `">` + args + `</u:` + action + `></s:Body></s:Envelope>`
+	req, _ := http.NewRequest("POST", base+path, strings.NewReader(body))
+	req.Header.Set("Content-Type", `text/xml; charset="utf-8"`)
+	req.Header.Set("SOAPACTION", `"`+service+`#`+action+`"`)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+func unesc(s string) string {
+	return strings.NewReplacer("&lt;", "<", "&gt;", ">", "&quot;", `"`, "&#34;", `"`, "&amp;", "&").Replace(s)
+}
+
+// The multiplexer is a DLNA media server like the real devices, so TVs list it
+// as a video source and can browse and play its channels.
+func TestDLNAMediaServer(t *testing.T) {
+	const cd = "urn:schemas-upnp-org:service:ContentDirectory:1"
+	e := setup(t, []int{1}, 1, nil)
+	e.lu.Replace(append(append([]lineup.Entry{}, testLineup...), lineup.Entry{GuideNumber: "5.9", GuideName: "SECRET", DRM: true, Frequency: 1}))
+
+	get := func(p string) string {
+		resp, err := http.Get(e.api + p)
+		if err != nil || resp.StatusCode != 200 {
+			t.Fatalf("GET %s: %v %v", p, resp, err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return string(b)
+	}
+	desc := get("/dms/device.xml")
+	for _, want := range []string{"urn:schemas-upnp-org:device:MediaServer:1", "DMS-1.50", "<UDN>uuid:", e.api + "/dms/ContentDirectory</controlURL>", "/dms/ConnectionManager.xml"} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("device description lacks %q:\n%s", want, desc)
+		}
+	}
+	if strings.Contains(strings.ToLower(desc), "silicon") {
+		t.Error("description mentions the vendor")
+	}
+	for _, p := range []string{"/dms/ContentDirectory.xml", "/dms/ConnectionManager.xml"} {
+		if !strings.Contains(get(p), "<scpd") {
+			t.Errorf("%s is not a service description", p)
+		}
+	}
+	if !strings.Contains(get("/device.xml"), "MediaServer:1") {
+		t.Error("/device.xml should describe the media server too")
+	}
+
+	_, root := soapCall(t, e.api, "/dms/ContentDirectory", cd, "Browse",
+		"<ObjectID>0</ObjectID><BrowseFlag>BrowseDirectChildren</BrowseFlag><Filter>*</Filter><StartingIndex>0</StartingIndex><RequestedCount>0</RequestedCount><SortCriteria></SortCriteria>")
+	root = unesc(root)
+	for _, want := range []string{`id="Favorites"`, `id="Channels"`, "<dlna:containerType>Tuner_1_0</dlna:containerType>", "<NumberReturned>2</NumberReturned>"} {
+		if !strings.Contains(root, want) {
+			t.Errorf("root browse lacks %q:\n%s", want, root)
+		}
+	}
+
+	_, ch := soapCall(t, e.api, "/dms/ContentDirectory", cd, "Browse",
+		"<ObjectID>Channels</ObjectID><BrowseFlag>BrowseDirectChildren</BrowseFlag><Filter>*</Filter><StartingIndex>1</StartingIndex><RequestedCount>2</RequestedCount><SortCriteria></SortCriteria>")
+	ch = unesc(ch)
+	for _, want := range []string{`id="Channels/v7.2"`, `id="Channels/v14.1"`, "<dc:title>7.2 BETA</dc:title>", "object.item.videoItem.videoBroadcast",
+		"<upnp:channelNr>7.2</upnp:channelNr>", fmt.Sprintf(">http://127.0.0.1:%d/auto/v7.2</res>", e.dev.StreamPort()),
+		"DLNA.ORG_PN=MPEG_TS_SD_NA_ISO", "<NumberReturned>2</NumberReturned>", "<TotalMatches>4</TotalMatches>"} {
+		if !strings.Contains(ch, want) {
+			t.Errorf("channel browse lacks %q:\n%s", want, ch)
+		}
+	}
+	if strings.Contains(ch, "SECRET") {
+		t.Error("an encrypted channel must not be offered")
+	}
+
+	// favourites follow the lineup's favourite flags
+	if resp, err := http.Post(e.api+"/lineup.post?favorite=%2B14.1", "", nil); err != nil || resp.StatusCode != 200 {
+		t.Fatalf("favorite: %v %v", resp, err)
+	}
+	_, fav := soapCall(t, e.api, "/dms/ContentDirectory", cd, "Browse",
+		"<ObjectID>Favorites</ObjectID><BrowseFlag>BrowseDirectChildren</BrowseFlag><Filter>*</Filter><StartingIndex>0</StartingIndex><RequestedCount>0</RequestedCount><SortCriteria></SortCriteria>")
+	if fav = unesc(fav); !strings.Contains(fav, `id="Channels/v14.1"`) || !strings.Contains(fav, "<TotalMatches>1</TotalMatches>") {
+		t.Errorf("favourites:\n%s", fav)
+	}
+
+	_, meta := soapCall(t, e.api, "/dms/ContentDirectory", cd, "Browse",
+		"<ObjectID>Channels/v7.1</ObjectID><BrowseFlag>BrowseMetadata</BrowseFlag><Filter>*</Filter><StartingIndex>0</StartingIndex><RequestedCount>1</RequestedCount><SortCriteria></SortCriteria>")
+	if !strings.Contains(unesc(meta), "<dc:title>7.1 ALPHA</dc:title>") {
+		t.Errorf("item metadata:\n%s", meta)
+	}
+	if code, body := soapCall(t, e.api, "/dms/ContentDirectory", cd, "Browse",
+		"<ObjectID>nope</ObjectID><BrowseFlag>BrowseDirectChildren</BrowseFlag><Filter>*</Filter><StartingIndex>0</StartingIndex><RequestedCount>1</RequestedCount><SortCriteria></SortCriteria>"); code != 500 || !strings.Contains(body, "<errorCode>701</errorCode>") {
+		t.Errorf("unknown object: %d %s", code, body)
+	}
+	if _, id := soapCall(t, e.api, "/dms/ContentDirectory", cd, "GetSystemUpdateID", ""); !strings.Contains(id, "<Id>") {
+		t.Errorf("GetSystemUpdateID: %s", id)
+	}
+	_, pi := soapCall(t, e.api, "/dms/ConnectionManager", "urn:schemas-upnp-org:service:ConnectionManager:1", "GetProtocolInfo", "")
+	if !strings.Contains(pi, "MPEG_TS_SD_NA_ISO") {
+		t.Errorf("protocol info: %s", pi)
+	}
+
+	req, _ := http.NewRequest("SUBSCRIBE", e.api+"/dms/ContentDirectory", nil)
+	req.Header.Set("CALLBACK", "<http://127.0.0.1:9/cb>")
+	req.Header.Set("NT", "upnp:event")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != 200 || !strings.HasPrefix(resp.Header.Get("SID"), "uuid:") {
+		t.Fatalf("SUBSCRIBE: %v %v", resp, err)
+	}
+}

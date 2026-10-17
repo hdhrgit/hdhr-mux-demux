@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 type Entry struct {
@@ -33,6 +34,7 @@ type Lineup struct {
 	mu      sync.RWMutex
 	path    string
 	entries []Entry
+	rev     atomic.Uint64
 }
 
 // Open loads the lineup from path (a missing file is an empty lineup). An
@@ -81,6 +83,7 @@ func (l *Lineup) Replace(es []Entry) error {
 }
 
 func (l *Lineup) save() error {
+	l.rev.Add(1)
 	if l.path == "" {
 		return nil
 	}
@@ -257,3 +260,6 @@ func (l *Lineup) LearnRF(es []Entry, addUnknown bool) (changed int) {
 	}
 	return changed
 }
+
+// Rev counts changes to the lineup (used as the DLNA UpdateID).
+func (l *Lineup) Rev() uint64 { return l.rev.Load() }
