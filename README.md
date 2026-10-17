@@ -218,7 +218,12 @@ packets; scanning needs about 1.5 s for ATSC 3.0 to lock.
 
 ## Known limitations
 
-* Not tested with Plex, Jellyfin or Channels DVR themselves, nor SSDP on the LAN.
+* Clients: tested with Channels DVR (discovery, lineup, live viewing of several
+  channels at once, signal display), VLC and the official `hdhomerun_config`. Not
+  tested with Plex or Jellyfin, nor with scheduled recordings in Channels DVR.
+* SSDP/DLNA: the multiplexer answers searches and announces itself on the LAN, and other UPnP
+  clients fetch its description. An LG webOS TV does not list it as a video source yet, although
+  it lists the real tuners (open: the TV never requests the description).
 * Setting `channel` through the control protocol waits for the stream to start
   (up to about 10 s on a channel with no signal) instead of returning at once
   like a real tuner, so scanning *through* the control protocol is slow; use
