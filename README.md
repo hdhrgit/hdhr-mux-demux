@@ -89,11 +89,17 @@ still share one) and the multiplexer does no demuxing there.
 | Port 80: `discover.json`, `lineup.json`, `lineup.xml`, `lineup_status.json`, `lineup.post?scan=…`, `status.json`, `device.xml`, `tuners.html`, `lineup.html` | yes |
 | Port 5004: `/auto/vX.Y`, `/tunerN/vX.Y`, `/auto/chFREQ[-PROGRAM]`, `?duration=`, real error headers (`801`, `804`–`807`) | yes |
 | SSDP | yes (default interface only) |
-| Channel scan (`us-bcast`, `us-cable`, `us-hrc`), ATSC 1.0 and 3.0, one tuner per device in parallel, results merged | yes |
+| Channel scan (`us-bcast`, `us-cable`, `us-hrc`), ATSC 1.0 and 3.0, on every free tuner of every device, results merged | yes |
+| `/lineup/scan` control variable (`get` → `state=… progress=…% found=…`, `set start` / `abort`) | yes |
 | Transcoding, other channel maps, firmware upgrade, DVR/storage | no |
 
-The scan uses one tuner on every device at once, each taking the next
-unscanned RF channel. Duplicates (the same guide number on several RF channels,
+A scan uses **every free tuner of every device** at once (as a real device's own
+scan takes all its tuners), each taking the next unscanned RF channel; it never
+evicts a viewer, and `lineup.scan_tuners_per_device` caps it if you prefer. Tuners
+that cannot do ATSC 3.0 hand channels that show signal but do not lock to the
+capable ones. Tuners held by the scan refuse streams at once (`804`) and `/auto/`
+goes around them. Start it with `POST /lineup.post?scan=start` or
+`set /lineup/scan start`. Duplicates (the same guide number on several RF channels,
 e.g. ATSC 1.0 and 3.0 simulcasts) keep the unencrypted, ATSC 1.0, stronger copy;
 codec and HD details are copied from the devices' own lineups.
 
@@ -149,12 +155,18 @@ Tested against an HDHR5-4K and two HDFX-4K (firmware 20260326, ATSC 1.0 + 3.0
 antenna) that share the network with a DVR, using `curl`, `hdhrctl`, `tscheck`
 and the official `hdhomerun_config` (Debian package, run in a container):
 
-* A 35-channel scan (2-36) on three devices takes about 25 s and finds 137 programs, ATSC 3.0 services included.
+* A full 68-channel scan on 14 free tuners of four devices takes about 12 s and finds the same 137 programs (the same scan on one tuner per device took about 30 s).
 * Viewers of several programs per RF channel share one tuner; ATSC 1.0 streams
   land on tuners 2/3, 3.0 services on tuners 0/1; minutes-long soaks show no
   sync or continuity errors; tuners are released cleanly.
 * The official tool can discover the multiplexer, read/set tuners 0-11, and
   `save` from it with no network errors (same result as from a real device).
+
+A device's own `/lineup/scan` (also what `lineup.post?scan=start` triggers) takes all its tuners:
+every `/tunerN/…` variable answers `ERROR: tuner busy` and running streams are cut
+(the multiplexer fails them over to another device). It takes about 80 s, and
+`libhdhomerun`'s `hdhomerun_config scan` is the one-tuner alternative. The control
+syntax is `get /lineup/scan` → `state=complete progress=100% found=161`, `set /lineup/scan start|abort`.
 
 What the hardware taught us, all handled: streaming is on port **5004**, not 80;
 unknown channels answer `801 Unknown Channel`, busy tuners `804`, tune failures

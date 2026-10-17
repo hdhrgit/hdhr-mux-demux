@@ -117,6 +117,7 @@ type Pool struct {
 	busy    map[tkey]bool
 	avoid   map[tkey]time.Time // temporarily skipped
 	caps    map[tkey]capability
+	scan    map[tkey]bool // tuners held by a channel scan
 	changed chan struct{} // closed & replaced whenever availability may have changed
 	allow   map[uint32]bool
 	exclude map[tkey]bool
@@ -151,7 +152,7 @@ func NewPool(cfg Config) (*Pool, error) {
 	}
 	p := &Pool{
 		cfg: cfg, devices: map[uint32]*Device{}, busy: map[tkey]bool{}, avoid: map[tkey]time.Time{},
-		caps: map[tkey]capability{}, changed: make(chan struct{}),
+		caps: map[tkey]capability{}, scan: map[tkey]bool{}, changed: make(chan struct{}),
 		allow: map[uint32]bool{}, exclude: map[tkey]bool{}, ignore: map[uint32]bool{},
 	}
 	for _, s := range cfg.AllowIDs {
@@ -511,13 +512,31 @@ func (p *Pool) pinnedProblem(req Request) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	k := tkey{ref.DeviceID, ref.Index}
-	if p.exclude[k] {
-		return ErrTunerBusy
+	if p.exclude[k] || p.scan[k] {
+		return ErrTunerBusy // a scan has it: do not wait for the scan to end
 	}
 	if req.Service && p.caps[k] == capNo {
 		return ErrTunerUnsuitable
 	}
 	return nil
+}
+
+// HeldByScan reports whether a channel scan is using physical tuner global.
+func (p *Pool) HeldByScan(global int) bool {
+	ref, ok := p.Resolve(global)
+	if !ok {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.scan[tkey{ref.DeviceID, ref.Index}]
+}
+
+// ATSC3Capable reports whether the leased tuner is proven to lock ATSC 3.0.
+func (l *Lease) ATSC3Capable() bool {
+	l.pool.mu.Lock()
+	defer l.pool.mu.Unlock()
+	return l.pool.caps[tkey{l.dev.ID, l.idx}] == capYes
 }
 
 func (p *Pool) setCap(k tkey, c capability) {

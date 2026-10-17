@@ -1245,3 +1245,92 @@ func TestDebugVariableFormat(t *testing.T) {
 		t.Fatal("/tuner/debug does not exist on real devices either")
 	}
 }
+
+func lockedTuners(t *testing.T, f *fakehdhr.Device, n int) int {
+	t.Helper()
+	raw := hdhrproto.NewControl(f.Addr())
+	defer raw.Close()
+	locked := 0
+	for i := 0; i < n; i++ {
+		if v, err := raw.Get(fmt.Sprintf("/tuner%d/lockkey", i)); err == nil && v != "none" {
+			locked++
+		}
+	}
+	return locked
+}
+
+// /lineup/scan works like a real device's: get shows state/progress/found,
+// set start|abort controls it. A scan takes every free tuner (never evicting a
+// viewer), the tuners it holds refuse streams at once with 804, and /auto/ goes
+// around them.
+func TestLineupScanVariable(t *testing.T) {
+	e := setup(t, []int{3}, 3, func(c *vdev.Config) { c.ScanFrom, c.ScanTo = 2, 36 })
+	ctl := hdhrproto.NewControl(e.ctl)
+	defer ctl.Close()
+	e.lu.Replace(nil)
+
+	if v, _ := ctl.Get("/lineup/scan"); v != "state=idle progress=0% found=0" {
+		t.Fatalf("before any scan: %q", v)
+	}
+	if _, err := ctl.Set("/lineup/scan", "bogus", 0); err == nil || !strings.Contains(err.Error(), "unknown scan command") {
+		t.Fatalf("bogus command: %v", err)
+	}
+	e.lu.Replace(testLineup)
+	if _, err := ctl.Set("/lineup/scan", "start", 0); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := ctl.Get("/lineup/scan"); !strings.HasPrefix(v, "state=running progress=") {
+		t.Fatalf("while scanning: %q", v)
+	}
+	waitFor(t, "scan tuners locked", 3*time.Second, func() bool { return lockedTuners(t, e.fakes[0], 3) == 3 })
+	if _, err := ctl.Set("/lineup/scan", "start", 0); err == nil {
+		t.Fatal("second scan should be refused while one is running")
+	}
+	// a tuner held by the scan is refused immediately, not after a wait
+	began := time.Now()
+	_, resp := e.open("/tuner0/v7.1")
+	if resp.StatusCode != 503 || resp.Header.Get("X-HDHomeRun-Error") != "804 Tuner In Use" || time.Since(began) > time.Second {
+		t.Fatalf("stream on a scan tuner: %d %v after %v", resp.StatusCode, resp.Header, time.Since(began))
+	}
+	waitFor(t, "scan to finish", 40*time.Second, func() bool { v, _ := ctl.Get("/lineup/scan"); return strings.HasPrefix(v, "state=complete") })
+	if v, _ := ctl.Get("/lineup/scan"); v != "state=complete progress=100% found=7" {
+		t.Fatalf("after the scan: %q", v)
+	}
+	if n := lockedTuners(t, e.fakes[0], 3); n != 0 {
+		t.Fatalf("%d tuners still locked after the scan", n)
+	}
+	c, _ := e.open("/tuner0/v7.1")
+	if c == nil {
+		t.Fatal("tuner 0 should be usable again")
+	}
+	c.close()
+
+	// abort
+	ctl.Set("/lineup/scan", "start", 0)
+	time.Sleep(300 * time.Millisecond)
+	if _, err := ctl.Set("/lineup/scan", "abort", 0); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "abort", 5*time.Second, func() bool { v, _ := ctl.Get("/lineup/scan"); return strings.HasPrefix(v, "state=aborted") })
+	waitFor(t, "tuners released", 3*time.Second, func() bool { return lockedTuners(t, e.fakes[0], 3) == 0 })
+}
+
+// With the number of scan tuners limited, the others stay available.
+func TestScanTunerLimit(t *testing.T) {
+	e := setup(t, []int{3}, 3, func(c *vdev.Config) { c.ScanFrom, c.ScanTo, c.ScanTuners = 2, 36, 1 })
+	e.lu.Replace(testLineup)
+	if err := e.dev.StartScan(""); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "scan tuner locked", 3*time.Second, func() bool { return lockedTuners(t, e.fakes[0], 3) >= 1 })
+	if n := lockedTuners(t, e.fakes[0], 3); n != 1 {
+		t.Fatalf("scan holds %d tuners, want 1", n)
+	}
+	c, _ := e.open("/auto/v7.1") // goes to a tuner the scan does not hold
+	if c == nil {
+		t.Fatal("/auto/ refused although two tuners are free")
+	}
+	c.read(t, 188*50)
+	c.close()
+	e.dev.AbortScan()
+}

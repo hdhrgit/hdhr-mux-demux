@@ -369,7 +369,11 @@ func (d *Device) setTarget(t *tuner, v string) error {
 
 func (d *Device) status(t *tuner) string {
 	fc := d.findChannel(t.freq)
-	if t.channel == "none" || fc == nil || (fc.ATSC3 && t.idx > 1) {
+	if fc != nil && fc.ATSC3 && t.idx > 1 && t.channel != "none" {
+		// like the real thing: the signal is there, but this tuner cannot lock it
+		return fmt.Sprintf("ch=%s lock=none ss=60 snq=0 seq=0 bps=0 pps=0", t.channel)
+	}
+	if t.channel == "none" || fc == nil {
 		ch := t.channel
 		return fmt.Sprintf("ch=%s lock=none ss=0 snq=0 seq=0 bps=0 pps=0", ch)
 	}

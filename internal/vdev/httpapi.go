@@ -459,6 +459,9 @@ func (d *Device) openAuto(ctx context.Context, rq streamReq, start func(*VTuner)
 			continue
 		}
 		score := 1000 // unpinned tuners draw from the pool: last resort
+		if v.pinned() && pool.HeldByScan(v.idx) {
+			continue // a channel scan has it
+		}
 		if v.pinned() {
 			class, ok := pool.Suitability(v.idx, rq.service || d.hub.IsService(rq.spec.Frequency))
 			if !ok {

@@ -18,7 +18,8 @@
   "lineup": {
     "channel_map": "us-bcast",
     "default_source": "Antenna",
-    "scan_on_start": true
+    "scan_on_start": true,
+    "scan_tuners_per_device": 0
   },
 
   "linger": "5s",

@@ -74,6 +74,8 @@ type Lineup struct {
 	ScanFrom      int               `json:"scan_from"`
 	ScanTo        int               `json:"scan_to"`
 	ScanOnStart   bool              `json:"scan_on_start"` // when the lineup is empty
+	// ScanTuners limits tuners used per device by a scan (0 = every free one).
+	ScanTuners int `json:"scan_tuners_per_device"`
 }
 
 func Load(path string) (*Config, error) {

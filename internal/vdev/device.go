@@ -37,7 +37,10 @@ type Config struct {
 	Sources       map[string]string
 	DefaultSource string
 	ScanFrom      int // first/last channel number to scan (0 = whole map)
-	ScanTo        int
+	// ScanTuners limits how many tuners of each device a scan uses (0 = every
+	// free one, like a real device's own scan; viewers are never evicted).
+	ScanTuners int
+	ScanTo     int
 
 	HTTPAddr string // web/API port, e.g. ":80"
 	// StreamAddr is the streaming port real devices use (default ":5004");
@@ -117,11 +120,13 @@ type Device struct {
 	httpSrv  *http.Server
 	ssdp     *ssdpServer
 
-	scanMu   sync.Mutex
-	scanning bool
-	scanProg hub.Progress
-	scanCtx  context.CancelFunc
-	source   string
+	scanMu    sync.Mutex
+	scanning  bool
+	scanProg  hub.Progress
+	scanCtx   context.CancelFunc
+	scanEnd   string // outcome of the last scan: complete or aborted (empty if none)
+	scanFound int
+	source    string
 
 	quit chan struct{}
 	wg   sync.WaitGroup
@@ -335,6 +340,21 @@ func (d *Device) GetSet(remote net.IP, name string, value *string, lockkey *uint
 	switch {
 	case len(parts) == 2 && parts[0] == "sys":
 		return d.sysVar(parts[1], value)
+	case len(parts) == 2 && parts[0] == "lineup" && parts[1] == "scan":
+		if value == nil {
+			return d.lineupScan(), nil
+		}
+		switch *value {
+		case "start":
+			if err := d.StartScan(""); err != nil {
+				return "", errors.New("ERROR: " + err.Error())
+			}
+		case "abort":
+			d.AbortScan()
+		default:
+			return "", errors.New("ERROR: unknown scan command")
+		}
+		return "", nil
 	case len(parts) == 2 && parts[0] == "lineup" && parts[1] == "location":
 		if value == nil {
 			return "disabled", nil
@@ -430,11 +450,12 @@ func (d *Device) StartScan(source string) error {
 	go func() {
 		defer d.wg.Done()
 		log.Printf("scan: starting %s scan of %d channels", source, len(sel))
-		found, err := d.hub.Scan(ctx, hub.ScanConfig{Channels: sel, Source: source, LockWait: d.cfg.ScanLockWait, InfoWait: d.cfg.ScanInfoWait}, func(p hub.Progress) {
+		found, err := d.hub.Scan(ctx, hub.ScanConfig{Channels: sel, Source: source, LockWait: d.cfg.ScanLockWait, InfoWait: d.cfg.ScanInfoWait, PerDevice: d.cfg.ScanTuners}, func(p hub.Progress) {
 			d.scanMu.Lock()
 			d.scanProg = p
 			d.scanMu.Unlock()
 		})
+		end := "aborted"
 		if err != nil && ctx.Err() == nil {
 			log.Printf("scan: failed: %v", err)
 		} else if ctx.Err() != nil {
@@ -444,9 +465,11 @@ func (d *Device) StartScan(source string) error {
 				log.Printf("scan: saving lineup: %v", err)
 			}
 			log.Printf("scan: finished, %d programs found", len(found))
+			end = "complete"
 		}
 		d.scanMu.Lock()
 		d.scanning, d.scanCtx = false, nil
+		d.scanEnd, d.scanFound = end, len(found)
 		d.scanMu.Unlock()
 	}()
 	return nil
@@ -458,6 +481,29 @@ func (d *Device) AbortScan() {
 	if d.scanCtx != nil {
 		d.scanCtx()
 	}
+}
+
+// lineupScan renders the /lineup/scan variable the way a real device does:
+// "state=complete progress=100% found=161".
+func (d *Device) lineupScan() string {
+	d.scanMu.Lock()
+	defer d.scanMu.Unlock()
+	switch {
+	case d.scanning:
+		pct := 0
+		if d.scanProg.Total > 0 {
+			pct = d.scanProg.Done * 100 / d.scanProg.Total
+		}
+		return fmt.Sprintf("state=running progress=%d%% found=%d", pct, d.scanProg.Found)
+	case d.scanEnd == "aborted":
+		return "state=aborted progress=100% found=0"
+	case d.scanEnd != "":
+		return fmt.Sprintf("state=complete progress=100%% found=%d", d.scanFound)
+	}
+	if n := len(d.lineup.Entries(true)); n > 0 {
+		return fmt.Sprintf("state=complete progress=100%% found=%d", n)
+	}
+	return "state=idle progress=0% found=0"
 }
 
 func (d *Device) scanState() (bool, hub.Progress, string) {

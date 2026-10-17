@@ -103,6 +103,7 @@ func main() {
 		DefaultSource: cfg.Lineup.DefaultSource,
 		ScanFrom:      cfg.Lineup.ScanFrom,
 		ScanTo:        cfg.Lineup.ScanTo,
+		ScanTuners:    cfg.Lineup.ScanTuners,
 		HTTPAddr:      cfg.HTTPListen,
 		ControlAddr:   cfg.ControlListen,
 		StreamAddr:    cfg.StreamListen,

@@ -35,7 +35,8 @@ type Lease struct {
 	idx  int
 	once sync.Once
 
-	src Source
+	src  Source
+	scan bool // held by a channel scan
 	// control lock, used by rtp mode and scanning (HTTP streams are locked
 	// by the device itself for as long as the connection lives)
 	key uint32
@@ -397,11 +398,14 @@ func (p *Pool) AcquireControl(ctx context.Context, deviceID uint32) (*Lease, err
 		if _, ok := p.markBusy(k); !ok {
 			continue
 		}
-		l := &Lease{pool: p, dev: d, idx: k.idx}
+		l := &Lease{pool: p, dev: d, idx: k.idx, scan: true}
 		if err := l.lockControl(); err != nil {
 			p.unbusy(k, time.Second)
 			continue
 		}
+		p.mu.Lock()
+		p.scan[k] = true
+		p.mu.Unlock()
 		return l, nil
 	}
 	return nil, ErrNoTuner
@@ -418,6 +422,11 @@ func (l *Lease) Release() {
 			l.src.Close()
 		}
 		l.releaseControl()
+		if l.scan {
+			l.pool.mu.Lock()
+			delete(l.pool.scan, tkey{l.dev.ID, l.idx})
+			l.pool.mu.Unlock()
+		}
 		l.pool.unbusy(tkey{l.dev.ID, l.idx}, 0)
 	})
 }

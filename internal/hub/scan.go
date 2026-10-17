@@ -27,6 +27,9 @@ type ScanConfig struct {
 	// take 1.5 s or more to lock, hence the long ceiling.
 	LockWait time.Duration
 	InfoWait time.Duration
+	// PerDevice limits how many tuners of each device are used (0 = every
+	// free one).
+	PerDevice int
 }
 
 // Progress is reported after each RF channel is examined.
@@ -54,38 +57,95 @@ func (h *Hub) Scan(ctx context.Context, cfg ScanConfig, progress func(Progress))
 		return nil, upstream.ErrNoTuner
 	}
 
-	work := make(chan chanmap.Channel, len(cfg.Channels))
-	for _, c := range cfg.Channels {
-		work <- c
+	// Take tuners: on every device, as many of the free ones as allowed
+	// (all of them by default; scanning never evicts a viewer).
+	type worker struct {
+		lease   *upstream.Lease
+		capable bool // proven to lock ATSC 3.0
 	}
-	close(work)
+	var workers []worker
+	anyCapable := false
+	for _, d := range devs {
+		for n := 0; cfg.PerDevice == 0 || n < cfg.PerDevice; n++ {
+			lease, err := h.pool.AcquireControl(ctx, d.ID)
+			if err != nil {
+				if n == 0 {
+					log.Printf("scan: no free tuner on %08X: %v", d.ID, err)
+				}
+				break
+			}
+			w := worker{lease, lease.ATSC3Capable()}
+			anyCapable = anyCapable || w.capable
+			workers = append(workers, w)
+		}
+	}
+	if len(workers) == 0 {
+		return nil, upstream.ErrNoTuner
+	}
+
+	// Two queues: everything starts in "general"; a channel that shows a
+	// strong signal but does not lock on a tuner that cannot do ATSC 3.0 is
+	// handed to the capable tuners instead.
+	general := make(chan chanmap.Channel, len(cfg.Channels))
+	capable := make(chan chanmap.Channel, len(cfg.Channels))
+	var pending sync.WaitGroup
+	for _, c := range cfg.Channels {
+		pending.Add(1)
+		general <- c
+	}
+	allDone := make(chan struct{})
+	go func() { pending.Wait(); close(allDone) }()
 
 	var (
-		mu      sync.Mutex
-		found   []lineup.Entry
-		done    int
-		workers int
-		wg      sync.WaitGroup
+		mu    sync.Mutex
+		found []lineup.Entry
+		done  int
+		wg    sync.WaitGroup
 	)
-	for _, d := range devs {
-		lease, err := h.pool.AcquireControl(ctx, d.ID)
-		if err != nil {
-			log.Printf("scan: no tuner on %08X: %v", d.ID, err)
-			continue
+	// next hands a worker its next channel: capable tuners take the hand-offs
+	// first; everyone else only draws from the general queue.
+	next := func(capableWorker bool) (ch chanmap.Channel, ok bool) {
+		if capableWorker {
+			select {
+			case ch = <-capable:
+				return ch, true
+			default:
+			}
+			select {
+			case ch = <-capable:
+				return ch, true
+			case ch = <-general:
+				return ch, true
+			case <-allDone:
+			case <-ctx.Done():
+			}
+			return ch, false
 		}
-		workers++
+		select {
+		case ch = <-general:
+			return ch, true
+		case <-allDone:
+		case <-ctx.Done():
+		}
+		return ch, false
+	}
+	for _, w := range workers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			defer lease.Release()
-			for ch := range work {
-				if ctx.Err() != nil {
+			defer w.lease.Release()
+			for {
+				ch, ok := next(w.capable)
+				if !ok {
 					return
 				}
-				es, strong := scanChannel(ctx, lease, cfg, ch)
+				es, strong := scanChannel(ctx, w.lease, cfg, ch)
 				if len(es) == 0 && strong {
-					// Strong signal but no lock: ATSC 3.0 sometimes needs a second try.
-					es, _ = scanChannel(ctx, lease, cfg, ch)
+					if !w.capable && anyCapable {
+						capable <- ch // not counted yet: a capable tuner will finish it
+						continue
+					}
+					es, _ = scanChannel(ctx, w.lease, cfg, ch) // ATSC 3.0 sometimes needs a second try
 				}
 				mu.Lock()
 				found = append(found, es...)
@@ -95,13 +155,11 @@ func (h *Hub) Scan(ctx context.Context, cfg ScanConfig, progress func(Progress))
 				if progress != nil {
 					progress(p)
 				}
+				pending.Done()
 			}
 		}()
 	}
-	if workers == 0 {
-		return nil, upstream.ErrNoTuner
-	}
-	log.Printf("scan: %d channel(s) on %d device(s)", len(cfg.Channels), workers)
+	log.Printf("scan: %d channel(s) on %d tuner(s) of %d device(s)", len(cfg.Channels), len(workers), len(devs))
 	wg.Wait()
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
