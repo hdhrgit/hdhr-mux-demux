@@ -149,7 +149,7 @@ Tested against an HDHR5-4K and two HDFX-4K (firmware 20260326, ATSC 1.0 + 3.0
 antenna) that share the network with a DVR, using `curl`, `hdhrctl`, `tscheck`
 and the official `hdhomerun_config` (Debian package, run in a container):
 
-* A 35-channel scan on three devices takes about 25 s and finds all 137 programs.
+* A 35-channel scan (2-36) on three devices takes about 25 s and finds 137 programs, ATSC 3.0 services included.
 * Viewers of several programs per RF channel share one tuner; ATSC 1.0 streams
   land on tuners 2/3, 3.0 services on tuners 0/1; minutes-long soaks show no
   sync or continuity errors; tuners are released cleanly.
