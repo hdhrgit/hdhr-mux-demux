@@ -19,8 +19,11 @@ import (
 
 const (
 	dmsDeviceType = "urn:schemas-upnp-org:device:MediaServer:1"
-	cdType        = "urn:schemas-upnp-org:service:ContentDirectory:1"
-	cmType        = "urn:schemas-upnp-org:service:ConnectionManager:1"
+	// atscDeviceType marks an ATSC 3.0 primary device, which real HDHomeRun 4K
+	// devices announce next to their media server.
+	atscDeviceType = "urn:schemas-atsc.org:device:primaryDevice:1.0"
+	cdType         = "urn:schemas-upnp-org:service:ContentDirectory:1"
+	cmType         = "urn:schemas-upnp-org:service:ConnectionManager:1"
 
 	// What the streams are: an MPEG-2 transport stream over HTTP.
 	dlnaFlags    = "DLNA.ORG_FLAGS=8D100000000000000000000000000000"
@@ -30,6 +33,8 @@ const (
 func (d *Device) dmsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /dms/device.xml", d.handleDMSDescription)
 	mux.HandleFunc("GET /device.xml", d.handleDMSDescription)
+	mux.HandleFunc("GET /atsc3/device.xml", d.handleATSCDescription)
+	mux.HandleFunc("GET /atsc3/{$}", d.handleATSCDescription)
 	mux.HandleFunc("GET /dms/ContentDirectory.xml", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", `text/xml; charset="utf-8"`)
 		io.WriteString(w, contentDirectorySCPD)
@@ -53,6 +58,36 @@ func esc(s string) string {
 }
 
 func (d *Device) udn() string { return "uuid:" + d.uuid() }
+
+// atscUDN identifies the ATSC 3.0 primary device, a device of its own next to the media server.
+func (d *Device) atscUDN() string {
+	id := strings.ToLower(hdhrproto.FormatDeviceID(d.cfg.DeviceID))
+	return fmt.Sprintf("uuid:%s-0000-0000-0001-%s0000", id, id)
+}
+
+// handleATSCDescription describes the ATSC 3.0 primary device: identity only,
+// as on real devices it has no services.
+func (d *Device) handleATSCDescription(w http.ResponseWriter, r *http.Request) {
+	id := hdhrproto.FormatDeviceID(d.cfg.DeviceID)
+	w.Header().Set("Content-Type", `text/xml; charset="utf-8"`)
+	fmt.Fprintf(w, `<?xml version="1.0" encoding="utf-8"?>
+<root xmlns="urn:schemas-upnp-org:device-1-0">
+  <specVersion><major>1</major><minor>0</minor></specVersion>
+  <device>
+    <deviceType>%s</deviceType>
+    <friendlyName>%s ATSC %s</friendlyName>
+    <presentationURL>/</presentationURL>
+    <manufacturer>%s</manufacturer>
+    <modelDescription>%s %s</modelDescription>
+    <modelName>%s</modelName>
+    <modelNumber>%s</modelNumber>
+    <serialNumber>%s</serialNumber>
+    <UDN>%s</UDN>
+  </device>
+</root>
+`, atscDeviceType, esc(d.cfg.FriendlyName), id, esc(d.cfg.Manufacturer),
+		esc(d.cfg.ModelNumber), esc(d.cfg.FriendlyName), esc(d.cfg.FriendlyName), esc(d.cfg.ModelNumber), id, d.atscUDN())
+}
 
 func (d *Device) handleDMSDescription(w http.ResponseWriter, r *http.Request) {
 	base := d.requestBase(r)

@@ -68,6 +68,8 @@ type Config struct {
 	// NoSSDP4 and NoSSDP6 switch SSDP off for one IP family (announcements
 	// and search answers): both families are on by default, as on real devices.
 	NoSSDP4, NoSSDP6 bool
+	// NoATSC3SSDP leaves the ATSC 3.0 primary device out of the announcements.
+	NoATSC3SSDP bool
 	// Hidden stops the multiplexer advertising itself: wildcard UDP discovery
 	// requests are not answered and SSDP is not started. Requests naming its
 	// device ID, and direct connections, still work.

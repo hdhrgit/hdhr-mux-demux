@@ -59,3 +59,12 @@ func TestSSDPFamilies(t *testing.T) {
 		t.Fatalf("ipv4 %v ipv6 %v, want true/false", *c.SSDPIPv4, *c.SSDPIPv6)
 	}
 }
+
+func TestSSDPATSC3Default(t *testing.T) {
+	if !*load(t, "").SSDPATSC3 {
+		t.Fatal("the ATSC 3.0 device should be announced by default")
+	}
+	if *load(t, `{"ssdp_atsc3": false}`).SSDPATSC3 {
+		t.Fatal("ssdp_atsc3: false ignored")
+	}
+}

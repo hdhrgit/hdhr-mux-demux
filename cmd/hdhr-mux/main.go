@@ -133,6 +133,7 @@ func main() {
 		SSDP:            *cfg.SSDP,
 		NoSSDP4:         !*cfg.SSDPIPv4,
 		NoSSDP6:         !*cfg.SSDPIPv6,
+		NoATSC3SSDP:     !*cfg.SSDPATSC3,
 		Hidden:          !*cfg.Discoverable,
 		LogRequests:     cfg.LogRequests,
 		IdleRelease:     time.Duration(cfg.IdleRelease),

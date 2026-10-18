@@ -45,6 +45,9 @@ type Config struct {
 	// announcements and search answers; ssdp: false switches both off.
 	SSDPIPv4 *bool `json:"ssdp_ipv4"`
 	SSDPIPv6 *bool `json:"ssdp_ipv6"`
+	// SSDPATSC3 (default true) also announces the ATSC 3.0 primary device,
+	// as real HDHomeRun 4K devices do.
+	SSDPATSC3 *bool `json:"ssdp_atsc3"`
 	// Discoverable (default true) lets clients find the multiplexer: it answers
 	// wildcard UDP discovery and announces itself over SSDP. When false it is
 	// only found by those who know its address or device ID.
@@ -180,6 +183,10 @@ func Load(path string) (*Config, error) {
 	if c.SSDPIPv6 == nil {
 		t := true
 		c.SSDPIPv6 = &t
+	}
+	if c.SSDPATSC3 == nil {
+		t := true
+		c.SSDPATSC3 = &t
 	}
 	if c.SSDP == nil {
 		t := true

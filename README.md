@@ -226,6 +226,10 @@ See [config.example.json](config.example.json). Notable keys:
   address of the interface carrying the default IPv4 route, and is skipped (with a log line)
   when that interface has none. Measured on the real devices; some TVs (an LG webOS one) only
   list the mux after hearing the startup announcement.
+  `ssdp_atsc3` (default `true`) also announces the ATSC 3.0 primary device
+  (`urn:schemas-atsc.org:device:primaryDevice:1.0`, description on `/atsc3/device.xml`: identity
+  only, no services, as on the real 4K devices), which makes a burst 8 targets x 2 = 16 packets
+  per IP family, like theirs.
 * `upstream.mode` – `http` (default) or `rtp`/`udp` (device pushes to this
   host; needs inbound UDP).
 * `linger` (5 s, `-1s` to disable), `client_buffer_mb` (16), `idle_release`.

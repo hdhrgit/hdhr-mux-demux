@@ -128,44 +128,60 @@ func (s *ssdpServer) stop() {
 	}
 }
 
-// ssdpTypes are the notification/search targets of the media server: the root
-// device, its UDN, the device type and its two services.
-func (d *Device) ssdpTypes() []string {
-	return []string{"upnp:rootdevice", d.udn(), dmsDeviceType, cmType, cdType}
+// ssdpTarget is one notification/search target: a device, a service or a root
+// device announcement, with the description document it points to.
+type ssdpTarget struct {
+	nt   string // NT / ST
+	usn  string
+	path string // the description, relative to the host
 }
 
-func (d *Device) ssdpUSN(nt string) string {
-	if nt == d.udn() {
-		return nt
+// ssdpTargets are the targets of the media server (root device, UDN, device
+// type, two services) and, unless switched off, of the ATSC 3.0 primary device
+// real HDHomeRun 4K devices announce next to it.
+func (d *Device) ssdpTargets() []ssdpTarget {
+	dms, atsc := d.udn(), d.atscUDN()
+	out := []ssdpTarget{
+		{"upnp:rootdevice", dms + "::upnp:rootdevice", "/dms/device.xml"},
+		{dms, dms, "/dms/device.xml"},
+		{dmsDeviceType, dms + "::" + dmsDeviceType, "/dms/device.xml"},
+		{cmType, dms + "::" + cmType, "/dms/device.xml"},
+		{cdType, dms + "::" + cdType, "/dms/device.xml"},
 	}
-	return d.udn() + "::" + nt
+	if !d.cfg.NoATSC3SSDP {
+		out = append(out,
+			ssdpTarget{"upnp:rootdevice", atsc + "::upnp:rootdevice", "/atsc3/device.xml"},
+			ssdpTarget{atsc, atsc, "/atsc3/device.xml"},
+			ssdpTarget{atscDeviceType, atsc + "::" + atscDeviceType, "/atsc3/device.xml"})
+	}
+	return out
 }
 
 // ssdpMatch returns the targets a search for st must be answered with.
-func (d *Device) ssdpMatch(st string) []string {
+func (d *Device) ssdpMatch(st string) []ssdpTarget {
 	if st == "ssdp:all" {
-		return d.ssdpTypes()
+		return d.ssdpTargets()
 	}
-	for _, t := range d.ssdpTypes() {
-		if strings.EqualFold(st, t) {
-			return []string{t}
+	var out []ssdpTarget
+	for _, t := range d.ssdpTargets() {
+		if strings.EqualFold(st, t.nt) {
+			out = append(out, t)
 		}
 	}
-	return nil
+	return out
 }
 
 // location is the description URL given to a client at remote.
-func (f *ssdpFamily) location(remote net.IP) string {
+func (f *ssdpFamily) location(path string, remote net.IP) string {
 	if f.v6 {
-		return "http://" + net.JoinHostPort(f.self.String(), strconv.Itoa(f.s.d.HTTPPort())) + "/dms/device.xml"
+		return "http://" + net.JoinHostPort(f.self.String(), strconv.Itoa(f.s.d.HTTPPort())) + path
 	}
-	return f.s.d.baseURL(localFor(remote)) + "/dms/device.xml"
+	return f.s.d.baseURL(localFor(remote)) + path
 }
 
-func (f *ssdpFamily) response(st string, remote net.IP) []byte {
-	d := f.s.d
+func (f *ssdpFamily) response(t ssdpTarget, remote net.IP) []byte {
 	return []byte(fmt.Sprintf("HTTP/1.1 200 OK\r\nServer: %s\r\nST: %s\r\nLocation: %s\r\nCache-Control: %s\r\nUSN: %s\r\nExt:\r\nDate: %s\r\nContent-Length: 0\r\n\r\n",
-		d.dmsServer(), st, f.location(remote), ssdpCacheAge, d.ssdpUSN(st), time.Now().UTC().Format(http.TimeFormat)))
+		f.s.d.dmsServer(), t.nt, f.location(t.path, remote), ssdpCacheAge, t.usn, time.Now().UTC().Format(http.TimeFormat)))
 }
 
 func (f *ssdpFamily) serve() {
@@ -197,12 +213,11 @@ func (f *ssdpFamily) hostHeader() string {
 // ssdpRepeats times over.
 func (f *ssdpFamily) notifyPackets(nts string) [][]byte {
 	d := f.s.d
-	loc := f.location(f.group.IP)
 	var out [][]byte
 	for r := 0; r < ssdpRepeats; r++ {
-		for _, nt := range d.ssdpTypes() {
+		for _, t := range d.ssdpTargets() {
 			out = append(out, []byte(fmt.Sprintf("NOTIFY * HTTP/1.1\r\nHost: %s\r\nCache-Control: %s\r\nLocation: %s\r\nNT: %s\r\nNTS: %s\r\nServer: %s\r\nUSN: %s\r\n\r\n",
-				f.hostHeader(), ssdpCacheAge, loc, nt, nts, d.dmsServer(), d.ssdpUSN(nt))))
+				f.hostHeader(), ssdpCacheAge, f.location(t.path, f.group.IP), t.nt, nts, d.dmsServer(), t.usn)))
 		}
 	}
 	return out
