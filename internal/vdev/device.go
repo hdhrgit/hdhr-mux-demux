@@ -65,6 +65,9 @@ type Config struct {
 	// AdvertiseHost overrides the host placed in BaseURL for discovery.
 	AdvertiseHost string
 	SSDP          bool
+	// NoSSDP4 and NoSSDP6 switch SSDP off for one IP family (announcements
+	// and search answers): both families are on by default, as on real devices.
+	NoSSDP4, NoSSDP6 bool
 	// Hidden stops the multiplexer advertising itself: wildcard UDP discovery
 	// requests are not answered and SSDP is not started. Requests naming its
 	// device ID, and direct connections, still work.

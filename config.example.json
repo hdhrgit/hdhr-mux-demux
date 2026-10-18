@@ -1,6 +1,9 @@
 {
   "device_id": "auto",
   "discoverable": true,
+  "ssdp": true,
+  "ssdp_ipv4": true,
+  "ssdp_ipv6": true,
   "friendly_name": "HDHomeRun Mux",
   "virtual_tuners": 0,
   "http_listen": ":80",

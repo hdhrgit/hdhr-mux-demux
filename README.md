@@ -219,6 +219,13 @@ See [config.example.json](config.example.json). Notable keys:
   connections, so add it to a client by address.
 * `upstream.mask` – `false` to pull whole multiplexes (default `true`: only the PIDs being
   watched, see *Bandwidth*).
+* `ssdp` – `false` switches SSDP/DLNA announcements and search answers off. `ssdp_ipv4` and
+  `ssdp_ipv6` (both default `true`) switch one IP family off. Like real HomeRuns the mux
+  announces every 10 minutes on `239.255.255.250` and on `ff02::c`, sending every notification
+  twice (about 22 ms apart), and answers searches on both. The IPv6 side uses the link-local
+  address of the interface carrying the default IPv4 route, and is skipped (with a log line)
+  when that interface has none. Measured on the real devices; some TVs (an LG webOS one) only
+  list the mux after hearing the startup announcement.
 * `upstream.mode` – `http` (default) or `rtp`/`udp` (device pushes to this
   host; needs inbound UDP).
 * `linger` (5 s, `-1s` to disable), `client_buffer_mb` (16), `idle_release`.

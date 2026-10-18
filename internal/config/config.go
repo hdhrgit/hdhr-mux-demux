@@ -41,6 +41,10 @@ type Config struct {
 	ControlListen string `json:"control_listen"` // default ":65001"
 	AdvertiseHost string `json:"advertise_host"`
 	SSDP          *bool  `json:"ssdp"`
+	// SSDPIPv4 and SSDPIPv6 (default true) choose the IP families SSDP uses for
+	// announcements and search answers; ssdp: false switches both off.
+	SSDPIPv4 *bool `json:"ssdp_ipv4"`
+	SSDPIPv6 *bool `json:"ssdp_ipv6"`
 	// Discoverable (default true) lets clients find the multiplexer: it answers
 	// wildcard UDP discovery and announces itself over SSDP. When false it is
 	// only found by those who know its address or device ID.
@@ -168,6 +172,14 @@ func Load(path string) (*Config, error) {
 	if c.Upstream.Mask == nil {
 		t := true
 		c.Upstream.Mask = &t
+	}
+	if c.SSDPIPv4 == nil {
+		t := true
+		c.SSDPIPv4 = &t
+	}
+	if c.SSDPIPv6 == nil {
+		t := true
+		c.SSDPIPv6 = &t
 	}
 	if c.SSDP == nil {
 		t := true

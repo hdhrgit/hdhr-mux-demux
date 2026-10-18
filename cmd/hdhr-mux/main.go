@@ -131,6 +131,8 @@ func main() {
 		StreamAddr:      cfg.StreamListen,
 		AdvertiseHost:   cfg.AdvertiseHost,
 		SSDP:            *cfg.SSDP,
+		NoSSDP4:         !*cfg.SSDPIPv4,
+		NoSSDP6:         !*cfg.SSDPIPv6,
 		Hidden:          !*cfg.Discoverable,
 		LogRequests:     cfg.LogRequests,
 		IdleRelease:     time.Duration(cfg.IdleRelease),

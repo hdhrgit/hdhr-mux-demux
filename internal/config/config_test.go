@@ -48,3 +48,14 @@ func TestEnvironmentOverrides(t *testing.T) {
 		t.Error("HDHOMERUN_DISCOVERABLE=false should hide the multiplexer")
 	}
 }
+
+func TestSSDPFamilies(t *testing.T) {
+	c := load(t, "")
+	if !*c.SSDPIPv4 || !*c.SSDPIPv6 {
+		t.Fatal("SSDP over IPv4 and IPv6 should default to on")
+	}
+	c = load(t, `{"ssdp_ipv6": false}`)
+	if !*c.SSDPIPv4 || *c.SSDPIPv6 {
+		t.Fatalf("ipv4 %v ipv6 %v, want true/false", *c.SSDPIPv4, *c.SSDPIPv6)
+	}
+}
