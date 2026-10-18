@@ -41,11 +41,11 @@ type Config struct {
 	ControlListen string `json:"control_listen"` // default ":65001"
 	AdvertiseHost string `json:"advertise_host"`
 	SSDP          *bool  `json:"ssdp"`
-	// SSDPIPv4 and SSDPIPv6 (default true) choose the IP families SSDP uses for
-	// announcements and search answers; ssdp: false switches both off.
+	// SSDPIPv4 (default true) and SSDPIPv6 (default false) choose the IP families
+	// SSDP uses for announcements and search answers; ssdp: false switches both off.
 	SSDPIPv4 *bool `json:"ssdp_ipv4"`
 	SSDPIPv6 *bool `json:"ssdp_ipv6"`
-	// SSDPATSC3 (default true) also announces the ATSC 3.0 primary device,
+	// SSDPATSC3 (default false) also announces the ATSC 3.0 primary device,
 	// as real HDHomeRun 4K devices do.
 	SSDPATSC3 *bool `json:"ssdp_atsc3"`
 	// Discoverable (default true) lets clients find the multiplexer: it answers
@@ -180,13 +180,13 @@ func Load(path string) (*Config, error) {
 		t := true
 		c.SSDPIPv4 = &t
 	}
-	if c.SSDPIPv6 == nil {
-		t := true
-		c.SSDPIPv6 = &t
+	if c.SSDPIPv6 == nil { // off unless asked for: the conservative choice
+		f := false
+		c.SSDPIPv6 = &f
 	}
 	if c.SSDPATSC3 == nil {
-		t := true
-		c.SSDPATSC3 = &t
+		f := false
+		c.SSDPATSC3 = &f
 	}
 	if c.SSDP == nil {
 		t := true

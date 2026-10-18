@@ -219,17 +219,19 @@ See [config.example.json](config.example.json). Notable keys:
   connections, so add it to a client by address.
 * `upstream.mask` – `false` to pull whole multiplexes (default `true`: only the PIDs being
   watched, see *Bandwidth*).
-* `ssdp` – `false` switches SSDP/DLNA announcements and search answers off. `ssdp_ipv4` and
-  `ssdp_ipv6` (both default `true`) switch one IP family off. Like real HomeRuns the mux
-  announces every 10 minutes on `239.255.255.250` and on `ff02::c`, sending every notification
-  twice (about 22 ms apart), and answers searches on both. The IPv6 side uses the link-local
+* `ssdp` – `false` switches SSDP/DLNA announcements and search answers off. `ssdp_ipv4`
+  (default `true`) and `ssdp_ipv6` (default `false`) switch one IP family on or off. Like real
+  HomeRuns the mux announces every 10 minutes on `239.255.255.250` and, with IPv6 on, on
+  `ff02::c`, sending every notification twice (about 22 ms apart), and answers searches on
+  each enabled family. The IPv6 side uses the link-local
   address of the interface carrying the default IPv4 route, and is skipped (with a log line)
   when that interface has none. Measured on the real devices; some TVs (an LG webOS one) only
   list the mux after hearing the startup announcement.
-  `ssdp_atsc3` (default `true`) also announces the ATSC 3.0 primary device
+  `ssdp_atsc3` (default `false`) also announces the ATSC 3.0 primary device
   (`urn:schemas-atsc.org:device:primaryDevice:1.0`, description on `/atsc3/device.xml`: identity
   only, no services, as on the real 4K devices), which makes a burst 8 targets x 2 = 16 packets
-  per IP family, like theirs.
+  per IP family, like theirs (5 x 2 = 10 without it). The conservative defaults keep what is
+  known to work: IPv4 and the media server only.
 * `upstream.mode` – `http` (default) or `rtp`/`udp` (device pushes to this
   host; needs inbound UDP).
 * `linger` (5 s, `-1s` to disable), `client_buffer_mb` (16), `idle_release`.

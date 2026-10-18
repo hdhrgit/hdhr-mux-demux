@@ -51,20 +51,20 @@ func TestEnvironmentOverrides(t *testing.T) {
 
 func TestSSDPFamilies(t *testing.T) {
 	c := load(t, "")
-	if !*c.SSDPIPv4 || !*c.SSDPIPv6 {
-		t.Fatal("SSDP over IPv4 and IPv6 should default to on")
-	}
-	c = load(t, `{"ssdp_ipv6": false}`)
 	if !*c.SSDPIPv4 || *c.SSDPIPv6 {
-		t.Fatalf("ipv4 %v ipv6 %v, want true/false", *c.SSDPIPv4, *c.SSDPIPv6)
+		t.Fatal("SSDP should default to IPv4 on, IPv6 off")
+	}
+	c = load(t, `{"ssdp_ipv6": true, "ssdp_ipv4": false}`)
+	if *c.SSDPIPv4 || !*c.SSDPIPv6 {
+		t.Fatalf("ipv4 %v ipv6 %v, want false/true", *c.SSDPIPv4, *c.SSDPIPv6)
 	}
 }
 
 func TestSSDPATSC3Default(t *testing.T) {
-	if !*load(t, "").SSDPATSC3 {
-		t.Fatal("the ATSC 3.0 device should be announced by default")
+	if *load(t, "").SSDPATSC3 {
+		t.Fatal("the ATSC 3.0 device should not be announced by default")
 	}
-	if *load(t, `{"ssdp_atsc3": false}`).SSDPATSC3 {
-		t.Fatal("ssdp_atsc3: false ignored")
+	if !*load(t, `{"ssdp_atsc3": true}`).SSDPATSC3 {
+		t.Fatal("ssdp_atsc3: true ignored")
 	}
 }
