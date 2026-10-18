@@ -288,10 +288,16 @@ func (h *Hub) Streams() []Info {
 	for _, st := range h.streams {
 		list = append(list, st)
 	}
+	flags := make([][2]bool, len(list))
+	for i, st := range list {
+		flags[i] = [2]bool{st.background, st.refs == 0 && st.idleTimer != nil}
+	}
 	h.mu.Unlock()
 	out := make([]Info, 0, len(list))
-	for _, st := range list {
-		out = append(out, st.Info())
+	for i, st := range list {
+		info := st.Info()
+		info.Background, info.Lingering = flags[i][0], flags[i][1]
+		out = append(out, info)
 	}
 	return out
 }
