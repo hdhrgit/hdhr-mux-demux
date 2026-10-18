@@ -568,6 +568,9 @@ type Info struct {
 	RxBytes    uint64
 	Lost       uint64
 	RxBPS      int // bitrate pulled from the physical tuner
+	// set by Hub.Streams only
+	Background bool // opened just to collect the guide
+	Lingering  bool // nobody is watching; held for a quick return
 }
 
 func (st *stream) Info() Info {

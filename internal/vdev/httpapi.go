@@ -40,6 +40,7 @@ func (d *Device) routes() http.Handler {
 	mux.HandleFunc("GET /status.json", d.handleStatus)
 	mux.HandleFunc("GET /tuners.html", d.handleTunersHTML)
 	mux.HandleFunc("GET /metrics", d.handleMetrics)
+	d.uiRoutes(mux)
 	mux.HandleFunc("GET /lineup.html", d.handleLineupHTML)
 	mux.HandleFunc("GET /{tuner}/{channel}", d.handleStream)
 	return mux
@@ -265,6 +266,12 @@ func (d *Device) page(w http.ResponseWriter, title, sub string, body func()) {
 }
 
 func (d *Device) handleIndex(w http.ResponseWriter, r *http.Request) {
+	// Browsers get the web interface; everything else (and ?classic) the plain
+	// menu real devices serve.
+	if strings.Contains(r.Header.Get("Accept"), "text/html") && r.URL.Query().Get("classic") == "" {
+		http.Redirect(w, r, "/ui/", http.StatusFound)
+		return
+	}
 	d.page(w, "HDHomeRun Main Menu", fmt.Sprintf("Model: %s<br>Device ID: %s<br>Firmware: %s",
 		html.EscapeString(d.cfg.ModelNumber), hdhrproto.FormatDeviceID(d.cfg.DeviceID), html.EscapeString(d.cfg.FirmwareVersion)), func() {
 		fmt.Fprint(w, "<ul><li><a href=\"/lineup.html\">Channel Lineup</a><li><a href=\"/tuners.html\">Tuner Status</a>"+

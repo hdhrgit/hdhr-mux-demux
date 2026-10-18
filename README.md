@@ -236,6 +236,34 @@ See [config.example.json](config.example.json). Notable keys:
   host; needs inbound UDP).
 * `linger` (5 s, `-1s` to disable), `client_buffer_mb` (16), `idle_release`.
 
+### Web interface (`/ui/`)
+
+Browsers that open the web port are sent to `/ui/` (the plain page real devices serve stays on
+`/?classic=1` and for non-browser clients). It needs no setup and no internet access: the files
+are embedded in the binary.
+
+* **Activity** – who is watching what, live (every 2 s): per tuner the physical tuner behind it,
+  RF channel, signal / quality / symbol meters, incoming bitrate history, and for every viewer
+  the client address, the channel, the programme on now with a progress bar and what is next
+  (from the guide), how long they have been watching, their bitrate, how full their buffer is
+  and any dropped data. Tuners used by other applications are marked, free tuners listed, and
+  background work (guide collection, tuners held for a quick return) shown separately.
+* **Lineup** – every channel with what is on now and next, search, filters (HD, being watched,
+  favourites), and a button that copies the channel's stream URL.
+* **Appearance** (the half-moon button) – System / Light / Dark, and a choice of theme for each:
+  Paper, Mist, Mint (light) and Slate, Midnight, Dusk, Ember (dark). None of them is pure white
+  or pure black. *System* follows the device and switches between your light and dark theme by
+  itself; the choice is kept in the browser. `?theme=midnight` on the URL forces a theme.
+
+The data behind it is plain JSON: `/ui/api/activity` and `/ui/api/lineup`.
+
+![Activity, Midnight theme](docs/ui-activity-midnight.png)
+![Activity, Paper theme](docs/ui-activity-paper.png)
+![Lineup, Mist theme](docs/ui-lineup-mist.png)
+
+`cmd/uidemo` runs the interface against simulated devices and viewers (no hardware needed);
+`-ui-dir internal/vdev/ui` serves the files from disk so edits show on reload.
+
 ### Monitoring (`/metrics`)
 
 `GET /metrics` on the web port (80) answers in the Prometheus text format, so Prometheus,

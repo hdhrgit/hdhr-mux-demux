@@ -25,6 +25,11 @@ type Program struct {
 	Number   uint16
 	VChannel string // e.g. "8.1"
 	Name     string
+	// Optional guide content; the defaults are "Now Show NAME" 30 minutes in
+	// of an hour, then "Next Show NAME".
+	Now, Next string
+	Elapsed   time.Duration
+	Length    time.Duration
 }
 
 type Channel struct {
@@ -619,9 +624,22 @@ func psipSections(ch *Channel) []psipSection {
 		minor, _ := strconv.Atoi(min)
 		src := uint16(i + 1)
 		chans = append(chans, psip.Channel{Name: p.Name, Major: uint16(major), Minor: uint16(minor), TSID: ch.TSID, Program: p.Number, SourceID: src})
+		nowTitle, nextTitle, elapsed, length := p.Now, p.Next, p.Elapsed, p.Length
+		if nowTitle == "" {
+			nowTitle = "Now Show " + p.Name
+		}
+		if nextTitle == "" {
+			nextTitle = "Next Show " + p.Name
+		}
+		if elapsed == 0 {
+			elapsed = 30 * time.Minute
+		}
+		if length == 0 {
+			length = time.Hour
+		}
 		evs := []psip.Event{
-			{ID: 1, Start: now.Add(-30 * time.Minute), Duration: time.Hour, Title: "Now Show " + p.Name, Language: "eng"},
-			{ID: 2, Start: now.Add(30 * time.Minute), Duration: time.Hour, Title: "Next Show " + p.Name, Language: "eng"},
+			{ID: 1, Start: now.Add(-elapsed), Duration: length, Title: nowTitle, Language: "eng"},
+			{ID: 2, Start: now.Add(length - elapsed), Duration: time.Hour, Title: nextTitle, Language: "eng"},
 		}
 		eits = append(eits, psipSection{0x1D00, psip.BuildEIT(src, evs, 18)})
 		for _, e := range evs {

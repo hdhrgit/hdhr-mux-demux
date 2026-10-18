@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en" data-theme="slate">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{{NAME}}</title>
+<link rel="icon" href="/ui/favicon.svg" type="image/svg+xml">
+<script>
+// Pick the theme before the first paint so there is no flash of the wrong one.
+(function () {
+  var LIGHT = ['paper', 'mist', 'mint'], DARK = ['slate', 'midnight', 'dusk', 'ember'];
+  var s = {};
+  try { s = JSON.parse(localStorage.getItem('hdhrmux.theme') || '{}'); } catch (e) {}
+  var mode = s.mode || 'system', light = s.light || 'paper', dark = s.dark || 'slate';
+  var q = new URLSearchParams(location.search).get('theme');
+  var t;
+  if (q && (LIGHT.indexOf(q) >= 0 || DARK.indexOf(q) >= 0)) t = q;
+  else if (mode === 'light') t = light;
+  else if (mode === 'dark') t = dark;
+  else t = (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) ? dark : light;
+  document.documentElement.setAttribute('data-theme', t);
+})();
+</script>
+<link rel="stylesheet" href="/ui/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="#/activity" aria-label="{{NAME}}">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" class="bm-bg"/><g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 11h7M6 16h7M6 21h7"/><path d="M13 11c5 0 5 5 10 5M13 16h10M13 21c5 0 5-5 10-5"/></g><circle cx="25" cy="16" r="2.2" fill="currentColor"/></svg>
+      <span class="brand-text"><b>{{NAME}}</b><small id="device-sub">&nbsp;</small></span>
+    </a>
+    <nav class="tabs" aria-label="Pages">
+      <a href="#/activity" data-tab="activity">Activity</a>
+      <a href="#/lineup" data-tab="lineup">Lineup</a>
+    </nav>
+    <div class="topbar-right">
+      <span class="conn" id="conn" role="status" aria-live="polite"><i></i><span>connecting</span></span>
+      <div class="menu-wrap">
+        <button class="icon-btn" id="theme-btn" aria-haspopup="dialog" aria-expanded="false" aria-controls="theme-pop" title="Appearance">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3v18" /><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/></svg>
+          <span class="sr-only">Appearance</span>
+        </button>
+        <div class="popover" id="theme-pop" role="dialog" aria-label="Appearance" hidden></div>
+      </div>
+    </div>
+  </div>
+</header>
+<main id="app" tabindex="-1"></main>
+<footer class="foot"><span id="foot-note"></span><span class="foot-links"><a href="/?classic=1">classic page</a><a href="/metrics">metrics</a><a href="/epg">guide (XMLTV)</a><a href="/status.json">status.json</a></span></footer>
+<script src="/ui/app.js"></script>
+</body>
+</html>
