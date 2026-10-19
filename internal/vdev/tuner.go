@@ -581,9 +581,23 @@ func (v *VTuner) set(remote net.IP, name, value string, key *uint32) (string, er
 		if err != nil {
 			return "", errors.New("ERROR: invalid channel")
 		}
+		v.mu.Lock()
+		watchers, owner := len(v.httpSubs), v.firstViewerLocked()
+		v.mu.Unlock()
 		if !ok {
+			// Channels DVR tells the tuner to let go (channel none, target none)
+			// each time one of its streams ends. HTTP viewers can share this tuner,
+			// and the others must keep their stream: a clear from one of them (or from
+			// anybody) does not end the viewing of the rest.
+			if watchers > 0 {
+				return value, nil
+			}
 			v.stopStreamKeepTarget()
 			return value, nil
+		}
+		if watchers > 0 && !v.carries(spec) {
+			// an HTTP stream holds the tuner, as on a real device
+			return "", fmt.Errorf("ERROR: resource locked by %s", owner)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -687,6 +701,25 @@ func (v *VTuner) channelmapNow() string {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	return v.channelmap
+}
+
+// firstViewerLocked is the address of the oldest HTTP viewer (the one that holds
+// the tuner, for the lock message). v.mu must be held.
+func (v *VTuner) firstViewerLocked() string {
+	oldest, who := time.Time{}, "another client"
+	for _, m := range v.viewers {
+		if oldest.IsZero() || m.since.Before(oldest) {
+			oldest, who = m.since, m.client
+		}
+	}
+	return who
+}
+
+// carries reports whether the tuner is already tuned to spec's RF channel.
+func (v *VTuner) carries(spec chanmap.Spec) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.tuned && v.spec.Key() == spec.Key()
 }
 
 // stopStreamKeepTarget implements "set channel none".

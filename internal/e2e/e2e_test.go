@@ -2448,3 +2448,54 @@ func TestRescanIsHandedToADevice(t *testing.T) {
 		t.Errorf("a busy device was asked to scan: %d", n)
 	}
 }
+
+// Channels DVR tells the tuner it was given to let go ("set channel none",
+// "set target none") every time one of its streams ends. With /auto/ viewers
+// sharing a tuner, that must not cut the viewers that are still watching.
+func TestClearingASharedTunerKeepsTheOtherViewers(t *testing.T) {
+	e := setup(t, []int{3}, 3, nil)
+	a, ra := e.open("/auto/v7.1")
+	b, rb := e.open("/auto/v7.2") // the same RF channel: shares the tuner
+	if a == nil || b == nil {
+		t.Fatal("streams refused")
+	}
+	defer a.close()
+	defer b.close()
+	res := ra.Header.Get("X-HDHomeRun-Resource")
+	if res == "" || res != rb.Header.Get("X-HDHomeRun-Resource") {
+		t.Fatalf("the viewers should share a tuner: %q %q", res, rb.Header.Get("X-HDHomeRun-Resource"))
+	}
+	a.read(t, 188*50)
+	b.read(t, 188*50)
+
+	ctl := hdhrproto.NewControl(e.ctl)
+	defer ctl.Close()
+	if _, err := ctl.Set("/"+res+"/target", "none", 0); err != nil {
+		t.Fatalf("target none: %v", err)
+	}
+	if _, err := ctl.Set("/"+res+"/channel", "none", 0); err != nil {
+		t.Fatalf("channel none: %v", err)
+	}
+	// both streams carry on
+	if an := analyze(t, a.read(t, 188*200)); !an.esProgs[1] || an.ccErrors != 0 {
+		t.Fatalf("viewer A after the clear: %v cc=%d", an.esProgs, an.ccErrors)
+	}
+	if an := analyze(t, b.read(t, 188*200)); !an.esProgs[2] || an.ccErrors != 0 {
+		t.Fatalf("viewer B after the clear: %v cc=%d", an.esProgs, an.ccErrors)
+	}
+	// retuning it to another channel is refused while viewers are on it
+	if _, err := ctl.Set("/"+res+"/channel", "auto:473000000", 0); err == nil || !strings.Contains(err.Error(), "resource locked") {
+		t.Fatalf("a retune under viewers: %v", err)
+	}
+	if n := e.activePhysical(); n != 1 {
+		t.Fatalf("%d physical tuners", n)
+	}
+
+	// with nobody on it, clearing works as before
+	a.close()
+	b.close()
+	waitFor(t, "released", 4*time.Second, func() bool { return e.activePhysical() == 0 })
+	if _, err := ctl.Set("/"+res+"/channel", "none", 0); err != nil {
+		t.Fatalf("channel none on an idle tuner: %v", err)
+	}
+}
