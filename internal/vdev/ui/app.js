@@ -151,7 +151,7 @@ function tunerHTML(t, nowSec) {
       <span class="chip-state ${t.state}">${state}</span></div>
     <div class="signals">${meter('Signal', sig.strength)}${meter('Quality', sig.quality)}${meter('Symbols', sig.symbol)}
       <div>${spark(history.get(t.index) || [])}<div class="rate"><b>${(t.rxBps / 1e6).toFixed(1)}</b> Mbps in</div></div></div>
-    ${t.state === 'other' ? '<div class="other-note">Another application is using this tuner. The multiplexer leaves it alone.</div>' : ''}
+    ${t.state === 'other' ? `<div class="other-note">In use by another application${t.holder ? `: <span class="mono">${esc(t.holder)}</span>${t.holderLocal ? ' (this machine)' : ''}` : ''}${t.transport ? ` · receiving over ${esc(t.transport)}` : ''}.<br>The multiplexer leaves it alone.${t.holderLocal ? ' A program on this machine looks just like the multiplexer to the device, since both use this address.' : ''}</div>` : ''}
     ${t.viewers.length ? `<div class="viewers">${t.viewers.map((v) => viewerHTML(v, nowSec)).join('')}</div>` : ''}</div>`;
 }
 function statCard(label, value, unit, sub, extra = '', cls = '') {
