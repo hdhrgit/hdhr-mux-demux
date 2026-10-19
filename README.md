@@ -255,6 +255,22 @@ directory or a named volume to it (`-v` above). The web interface's Settings pag
 when it is not mapped (or is only an anonymous volume). `--restart unless-stopped` lets the
 Settings page's Restart button work, and brings the multiplexer back after a reboot.
 
+**On the same machine as the DVR.** The multiplexer can run on bare metal next to Channels DVR
+(or Plex, Jellyfin, ...). Two ways, depending on whether the DVR should find it by itself:
+
+* *Everything on the machine's addresses (default).* A discovery broadcast sent from this machine
+  reaches the multiplexer like any other, and a client adding it by `127.0.0.1` or the machine's own
+  address gets answers (`BaseURL` follows the address the client used). Checked with `hdhrctl` on
+  the same host as the multiplexer.
+* *Local only:* `"bind": "127.0.0.1"` (or Bind address on the Settings page) puts the web, streaming
+  and control listeners on the loopback address only and turns SSDP off. Nothing on the network can
+  reach it or discover it; add it to the DVR as a device at `127.0.0.1`. Use this when the real
+  devices are already visible to the DVR and you only want the multiplexer's tuners for it. (Not yet
+  tried with Channels DVR itself.)
+
+The default ports are 80, 5004 and 65001: change `http_listen` if something else on the machine uses
+port 80.
+
 ### Configuration
 
 See [config.example.json](config.example.json). Notable keys:

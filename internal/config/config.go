@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,12 @@ import (
 
 	"hdhrmux/internal/hdhrproto"
 )
+
+// Loopback reports whether the multiplexer is bound to the loopback address only.
+func (c *Config) Loopback() bool {
+	ip := net.ParseIP(c.Bind)
+	return ip != nil && ip.IsLoopback()
+}
 
 // Duration is a time.Duration that unmarshals from strings like "30s".
 type Duration time.Duration
@@ -38,6 +45,12 @@ type Config struct {
 	// VirtualTuners is how many virtual tuners to expose. 0 = one per
 	// physical tuner, numbered 0..N-1 across all devices in a stable order.
 	VirtualTuners int `json:"virtual_tuners"`
+
+	// Bind restricts every listener whose address has no host (the default
+	// ":80", ":5004", ":65001") to this address. "127.0.0.1" serves only this
+	// machine, for a DVR running next to the multiplexer: SSDP is then off, and
+	// the DVR finds the multiplexer by address, not by broadcast.
+	Bind string `json:"bind"`
 
 	HTTPListen    string `json:"http_listen"`    // web/API, default ":80"
 	StreamListen  string `json:"stream_listen"`  // streams, default ":5004" ("-" disables)
@@ -288,6 +301,16 @@ func loadConfig(path string, overlay []byte, env bool) (*Config, error) {
 	case "device", "own":
 	default:
 		return nil, fmt.Errorf("lineup.scan_mode %q: want device or own", c.Lineup.ScanMode)
+	}
+	if c.Bind != "" {
+		if net.ParseIP(c.Bind) == nil {
+			return nil, fmt.Errorf("bind %q is not an IP address", c.Bind)
+		}
+		for _, a := range []*string{&c.HTTPListen, &c.StreamListen, &c.ControlListen} {
+			if strings.HasPrefix(*a, ":") {
+				*a = net.JoinHostPort(c.Bind, (*a)[1:])
+			}
+		}
 	}
 	if c.Linger == 0 {
 		c.Linger = Duration(5 * time.Second)

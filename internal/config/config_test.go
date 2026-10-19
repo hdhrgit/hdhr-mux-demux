@@ -182,3 +182,24 @@ func TestClassifyStorage(t *testing.T) {
 		}
 	}
 }
+
+func TestBind(t *testing.T) {
+	c := load(t, `{"bind":"127.0.0.1"}`)
+	if c.HTTPListen != "127.0.0.1:80" || c.StreamListen != "127.0.0.1:5004" || c.ControlListen != "127.0.0.1:65001" || !c.Loopback() {
+		t.Errorf("listeners %q %q %q loopback %v", c.HTTPListen, c.StreamListen, c.ControlListen, c.Loopback())
+	}
+	// explicit hosts and the disabled stream port are left alone
+	c = load(t, `{"bind":"10.1.2.3","http_listen":"0.0.0.0:8080","stream_listen":"-"}`)
+	if c.HTTPListen != "0.0.0.0:8080" || c.StreamListen != "-" || c.ControlListen != "10.1.2.3:65001" || c.Loopback() {
+		t.Errorf("listeners %q %q %q", c.HTTPListen, c.StreamListen, c.ControlListen)
+	}
+	if c := load(t, ""); c.HTTPListen != ":80" || c.Loopback() {
+		t.Errorf("default %q", c.HTTPListen)
+	}
+	dir := t.TempDir()
+	p := filepath.Join(dir, "c.json")
+	os.WriteFile(p, []byte(`{"bind":"not-an-ip"}`), 0o644)
+	if _, err := Load(p); err == nil {
+		t.Error("a bind that is not an IP address was accepted")
+	}
+}

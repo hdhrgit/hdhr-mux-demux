@@ -150,7 +150,7 @@ func run() int {
 		ControlAddr:            cfg.ControlListen,
 		StreamAddr:             cfg.StreamListen,
 		AdvertiseHost:          cfg.AdvertiseHost,
-		SSDP:                   *cfg.SSDP,
+		SSDP:                   *cfg.SSDP && !cfg.Loopback(), // multicast does not reach anybody over loopback
 		NoSSDP4:                !*cfg.SSDPIPv4,
 		NoSSDP6:                !*cfg.SSDPIPv6,
 		NoATSC3SSDP:            !*cfg.SSDPATSC3,

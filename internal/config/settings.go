@@ -41,6 +41,7 @@ var schema = []Field{
 	{Key: "virtual_tuners", Group: "General", Label: "Virtual tuners", Type: "int", Placeholder: "0", Help: "0 gives one per physical tuner, which is what you want."},
 	{Key: "discoverable", Group: "General", Label: "Discoverable", Type: "bool", Env: "HDHOMERUN_DISCOVERABLE", Help: "Answer wildcard discovery and announce over SSDP, so clients find the multiplexer by themselves. When off, add it to a client by address."},
 
+	{Key: "bind", Group: "Network", Label: "Bind address", Type: "text", Placeholder: "all interfaces", Help: "Listen on this address only (for example 127.0.0.1 when a DVR runs on this machine). Applies to the addresses below that have no host. Loopback also turns SSDP off."},
 	{Key: "http_listen", Group: "Network", Label: "Web / API address", Type: "text", Placeholder: ":80", Help: "host:port the web interface and the HDHomeRun HTTP API listen on. Use 127.0.0.1:80 to serve this machine only."},
 	{Key: "stream_listen", Group: "Network", Label: "Streaming address", Type: "text", Placeholder: ":5004", Help: "host:port streams are served on (- turns the extra port off)."},
 	{Key: "control_listen", Group: "Network", Label: "Control address", Type: "text", Placeholder: ":65001", Help: "host:port for the HDHomeRun control and discovery protocol (TCP and UDP)."},
@@ -312,6 +313,10 @@ func normalize(f Field, v any) (any, error) {
 				if err != nil || !hdhrproto.ValidDeviceID(id) {
 					return nil, errors.New("must be auto or 8 hex digits with a valid check digit")
 				}
+			}
+		case "bind":
+			if s != "" && net.ParseIP(s) == nil {
+				return nil, errors.New("must be an IP address such as 127.0.0.1")
 			}
 		case "http_listen", "control_listen", "stream_listen", "pprof_listen":
 			if s != "" && s != "-" {
