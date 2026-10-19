@@ -203,3 +203,31 @@ func TestBind(t *testing.T) {
 		t.Error("a bind that is not an IP address was accepted")
 	}
 }
+
+// The settings added with direct clients are on the page and take effect.
+func TestSettingsCoverClientSharing(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "c.json")
+	os.WriteFile(cfgPath, []byte(`{"state_dir":"`+filepath.Join(dir, "state")+`"}`), 0o644)
+	c, err := Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(cfgPath, c)
+	v := m.Values()
+	for _, k := range []string{"auto_join_direct", "auto_join_other_locations", "evict_scans"} {
+		if v[k] != true {
+			t.Errorf("%s = %v, want true by default", k, v[k])
+		}
+	}
+	if v["lineup.scan_mode"] != "device" {
+		t.Errorf("scan_mode %v", v["lineup.scan_mode"])
+	}
+	if err := m.Save(map[string]any{"auto_join_direct": false, "evict_scans": false, "stream_ttl": "50", "lineup.scan_mode": "own"}); err != nil {
+		t.Fatal(err)
+	}
+	c2, _ := Load(cfgPath)
+	if *c2.AutoJoinDirect || *c2.EvictScans || !*c2.AutoJoinOtherLocations || *c2.StreamTTL != 8 || c2.Lineup.ScanMode != "own" {
+		t.Fatalf("saved values not applied: %v %v %v %v %s", *c2.AutoJoinDirect, *c2.EvictScans, *c2.AutoJoinOtherLocations, *c2.StreamTTL, c2.Lineup.ScanMode)
+	}
+}
