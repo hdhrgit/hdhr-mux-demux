@@ -295,3 +295,5 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .savebar[hidden] { display: none; } .savebar .grow { flex: 1; } .savebar.done { border-color: var(--good); } .savebar.error { border-color: var(--bad); }
 .muted { color: var(--muted); }
 @media (max-width: 760px) { .field { grid-template-columns: 1fr; } .field.inline { grid-template-columns: 1fr auto; } .info-card dl { grid-template-columns: 1fr; gap: 2px; } .info-card dt { margin-top: 8px; } }
+#warn-wrap .banner { margin-top: 14px; margin-bottom: 0; }
+#sys-wrap .cards { margin-bottom: 6px; }
