@@ -199,15 +199,22 @@ is not decoded; the broadcasts usually cover a day or two ahead.
 
 ### Scan (explicit only)
 
-`POST /lineup.post?scan=start` (what a client's "rescan" does) or
-`set /lineup/scan start` runs a scan that teaches the locations of channels (and adds
-any the devices do not list) and re-reads the devices' lineups. It does not trigger the
-firmware's own scan, which takes all of a device's tuners and cuts running streams. It uses
-**every free tuner of every device** at once, each taking the next unscanned RF channel; it
-never evicts a viewer, and `lineup.scan_tuners_per_device` caps it. Tuners that cannot do
-ATSC 3.0 hand channels that show signal but do not lock to the capable ones. Tuners held by
-the scan refuse streams at once (`804`) and `/auto/` goes around them. `scan_on_start`
-is off by default.
+`POST /lineup.post?scan=start` (what a client's "rescan" does; Channels DVR does it about
+once a day) or `set /lineup/scan start` is **handed to one device's own scan** (`lineup.scan_mode:
+"device"`, the default). The multiplexer picks a device nobody is using (none of its tuners has a
+viewer of ours or another application; tuners only held for a quick return are let go), preferring
+one with ATSC 3.0 tuners because it finds both kinds of channel, marks all its tuners as scanning
+(they answer `804` and `/auto/` goes around them), starts `POST /lineup.post?scan=start` on the
+device, follows its `lineup_status.json` (shown as the multiplexer's own progress), and when it ends
+re-reads the devices' lineups. If every device is in use the request is refused (`409`): the client
+tries again later. The firmware scan takes all of a device's tuners and cuts whatever they stream,
+which is why it only ever runs on an idle device. Where a scan can change a device's lineup it
+does so on that device, and the other devices keep theirs.
+
+`lineup.scan_mode: "own"` keeps the multiplexer's own scan instead: it uses **every free tuner of
+every device** at once, each taking the next unscanned RF channel, never evicts a viewer, is capped by
+`lineup.scan_tuners_per_device`, teaches the multiplexer where channels are (and adds any the
+devices do not list) and re-reads the lineups. `scan_on_start` is off by default.
 
 ## Quick start
 

@@ -120,6 +120,7 @@ func main() {
 		ScanFrom:        cfg.Lineup.ScanFrom,
 		ScanTo:          cfg.Lineup.ScanTo,
 		ScanTuners:      cfg.Lineup.ScanTuners,
+		ScanMode:        cfg.Lineup.ScanMode,
 		LineupRefresh:   refresh,
 		GuideRefresh:    guideRefresh,
 		GuideHold:       time.Duration(cfg.Guide.Hold),

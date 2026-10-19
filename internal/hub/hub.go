@@ -281,6 +281,13 @@ func (h *Hub) reclaim(accept func(*upstream.Lease) bool) bool {
 	return true
 }
 
+// ReleaseLingeringOn lets go of every stream on the device that has no viewers
+// (lingering for a quick return, or collecting the guide), freeing its tuners.
+func (h *Hub) ReleaseLingeringOn(deviceID uint32) {
+	for h.reclaim(func(l *upstream.Lease) bool { return l.Device().ID == deviceID }) {
+	}
+}
+
 // Streams reports every active stream.
 func (h *Hub) Streams() []Info {
 	h.mu.Lock()

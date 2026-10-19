@@ -648,6 +648,49 @@ func (p *Pool) unbusy(k tkey, avoidFor time.Duration) {
 	p.mu.Unlock()
 }
 
+// HoldDevice reserves every tuner of a device that the pool uses, for something
+// the device does by itself (its own channel scan). All of them must be free;
+// the returned function gives them back.
+func (p *Pool) HoldDevice(id uint32) (release func(), err error) {
+	p.mu.Lock()
+	var keys []tkey
+	for _, k := range p.number {
+		if k.dev == id {
+			keys = append(keys, k)
+		}
+	}
+	online := p.devices[id] != nil
+	p.mu.Unlock()
+	if !online || len(keys) == 0 {
+		return nil, errors.New("device offline or not in use")
+	}
+	var held []tkey
+	for _, k := range keys {
+		if _, ok := p.markBusy(k); !ok {
+			for _, h := range held {
+				p.unbusy(h, 0)
+			}
+			return nil, ErrTunerBusy
+		}
+		held = append(held, k)
+	}
+	p.mu.Lock()
+	for _, k := range held {
+		p.scan[k] = true
+	}
+	p.mu.Unlock()
+	return func() {
+		p.mu.Lock()
+		for _, k := range held {
+			delete(p.scan, k)
+		}
+		p.mu.Unlock()
+		for _, k := range held {
+			p.unbusy(k, 2*time.Second) // the device needs a moment after its scan
+		}
+	}, nil
+}
+
 // strictWait bounds how long a pinned request waits for its tuner: a
 // tuner that is not ours to free (another application, or a device that has
 // not yet noticed a closed stream) should not stall the caller for long.

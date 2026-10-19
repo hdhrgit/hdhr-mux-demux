@@ -104,6 +104,10 @@ type Lineup struct {
 	ScanTo        int               `json:"scan_to"`
 	ScanOnStart   bool              `json:"scan_on_start"` // scan at start-up (off by default: the devices' lineups are used)
 	Refresh       Duration          `json:"refresh"`       // re-read the devices' lineups this often (default 10m, -1s = never)
+	// ScanMode: "device" (default) hands a rescan to one idle device's own firmware
+	// scan, preferring one with ATSC 3.0 tuners; "own" runs the multiplexer's own scan
+	// on every free tuner of every device.
+	ScanMode string `json:"scan_mode"`
 	// ScanTuners limits tuners used per device by a scan (0 = every free one).
 	ScanTuners int `json:"scan_tuners_per_device"`
 }
@@ -199,6 +203,13 @@ func Load(path string) (*Config, error) {
 	applyEnv(c)
 	if c.StreamListen == "" {
 		c.StreamListen = ":5004"
+	}
+	switch c.Lineup.ScanMode {
+	case "":
+		c.Lineup.ScanMode = "device"
+	case "device", "own":
+	default:
+		return nil, fmt.Errorf("lineup.scan_mode %q: want device or own", c.Lineup.ScanMode)
 	}
 	if c.Linger == 0 {
 		c.Linger = Duration(5 * time.Second)

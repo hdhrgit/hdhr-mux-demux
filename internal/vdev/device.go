@@ -68,6 +68,12 @@ type Config struct {
 	// NoSSDP4 and NoSSDP6 switch SSDP off for one IP family (announcements
 	// and search answers): both families are on by default, as on real devices.
 	NoSSDP4, NoSSDP6 bool
+	// ScanMode "device" hands a rescan to one idle device's own firmware scan;
+	// anything else (the default here) runs the multiplexer's own scan on every
+	// free tuner.
+	ScanMode string
+	// ScanPollInterval, if set, replaces the interval at which a device scan is polled.
+	ScanPollInterval time.Duration
 	// NoATSC3SSDP leaves the ATSC 3.0 primary device out of the announcements.
 	NoATSC3SSDP bool
 	// Hidden stops the multiplexer advertising itself: wildcard UDP discovery
@@ -86,6 +92,14 @@ type Config struct {
 	ScanInfoWait time.Duration
 	// LockTimeout expires an idle lockkey.
 	LockTimeout time.Duration
+}
+
+// ScanPoll is how often a device's scan is asked for its progress.
+func (c *Config) ScanPoll() time.Duration {
+	if c.ScanPollInterval > 0 {
+		return c.ScanPollInterval
+	}
+	return 2 * time.Second
 }
 
 func (c *Config) defaults() {
@@ -507,6 +521,9 @@ func (d *Device) lineupLoop() {
 // StartScan begins a background channel scan for source (default source if
 // empty). It fails if one is already running.
 func (d *Device) StartScan(source string) error {
+	if d.cfg.ScanMode == "device" {
+		return d.startDeviceScan(source)
+	}
 	if source == "" {
 		source = d.source
 	}

@@ -60,14 +60,22 @@ var (
 	testBuffer = 0                         // hub client buffer in bytes (0 = default)
 	testTuners func(ids []uint32) []string // upstream tuner list, built from the fake device IDs
 	testMask   = false                     // ask the devices to send only the PIDs being watched
+	testModels []string                    // device models by index (default: ATSC 3.0 capable)
 )
+
+func model(i int) string {
+	if i < len(testModels) {
+		return testModels[i]
+	}
+	return ""
+}
 
 func setup(t *testing.T, physTuners []int, virtual int, mod func(*vdev.Config)) *env {
 	t.Helper()
 	e := &env{t: t}
 	var addrs []string
 	for i, n := range physTuners {
-		f, err := fakehdhr.Start(fakehdhr.Config{DeviceID: hdhrproto.MakeDeviceID(0x10200000 + uint32(i)<<8), Tuners: n, Channels: channels})
+		f, err := fakehdhr.Start(fakehdhr.Config{DeviceID: hdhrproto.MakeDeviceID(0x10200000 + uint32(i)<<8), Tuners: n, Channels: channels, Model: model(i)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2331,5 +2339,112 @@ func TestPlaylistM3U(t *testing.T) {
 	}
 	if _, b := count("/playlist.m3u?group=none"); strings.Contains(b, "group-title") {
 		t.Errorf("group=none: %s", b)
+	}
+}
+
+// A rescan is handed to one device's own scan: an ATSC 3.0 capable one when
+// there is a choice, never one that is in use, and the lineup is re-read from the
+// devices afterwards. The device's tuners refuse streams while it scans.
+func TestRescanIsHandedToADevice(t *testing.T) {
+	old := testModels
+	testModels = []string{"hdhomerun_atsc", "hdhomerun5_atsc3"} // device 0 cannot do ATSC 3.0, device 1 can
+	t.Cleanup(func() { testModels = old })
+	e := setup(t, []int{2, 2}, 4, func(c *vdev.Config) {
+		c.ScanMode, c.ScanPollInterval = "device", 100*time.Millisecond
+	})
+	for _, f := range e.fakes {
+		f.HideFromLineup("7.2") // the channel only a scan finds
+	}
+	ctx := context.Background()
+	if err := e.dev.RefreshLineup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	has := func(n string) bool { _, ok := e.lu.Find(n); return ok }
+	if has("7.2") {
+		t.Fatal("7.2 should not be listed before the scan")
+	}
+
+	post := func() int {
+		r, err := http.Post(e.api+"/lineup.post?scan=start&source=Antenna", "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		return r.StatusCode
+	}
+	if code := post(); code != 200 {
+		t.Fatalf("rescan: %d", code)
+	}
+	if n, src := e.fakes[1].ScanRequests(); n != 1 || src != "Antenna" {
+		t.Fatalf("the ATSC 3.0 device should have been asked once, got %d (%q)", n, src)
+	}
+	if n, _ := e.fakes[0].ScanRequests(); n != 0 {
+		t.Fatalf("the other device was asked to scan too: %d", n)
+	}
+	var st map[string]any
+	getJSON(t, e.api+"/lineup_status.json", &st)
+	if st["ScanInProgress"] != float64(1) {
+		t.Fatalf("lineup_status while scanning: %v", st)
+	}
+	if code := post(); code != 409 {
+		t.Errorf("a second rescan while one runs: %d, want 409", code)
+	}
+	// the scanning device's tuners (2 and 3) refuse streams; /auto/ goes to the other device
+	if _, resp := e.open("/tuner2/v7.1"); resp.StatusCode != 503 || resp.Header.Get("X-HDHomeRun-Error") != "804 Tuner In Use" {
+		t.Errorf("a tuner of the scanning device: %d %v", resp.StatusCode, resp.Header)
+	}
+	h, rh := e.open("/auto/v14.1")
+	if h == nil {
+		t.Fatalf("/auto/ refused during a scan: %d", rh.StatusCode)
+	}
+	if r := rh.Header.Get("X-HDHomeRun-Resource"); r != "tuner0" && r != "tuner1" {
+		t.Errorf("/auto/ used %s, a tuner of the scanning device", r)
+	}
+	h.close()
+
+	waitFor(t, "the scan to finish", 5*time.Second, func() bool {
+		var s map[string]any
+		getJSON(t, e.api+"/lineup_status.json", &s)
+		return s["ScanInProgress"] == float64(0)
+	})
+	waitFor(t, "the channel the scan found", 3*time.Second, func() bool { return has("7.2") })
+	c, _ := e.open("/tuner2/v14.1")
+	if c == nil {
+		t.Fatal("tuner 2 should be usable once the scan is over")
+	}
+	c.close()
+
+	// busy devices are not scanned with: with a viewer on the ATSC 3.0 device the
+	// other one is used, and with both busy the request is refused
+	waitFor(t, "released", 4*time.Second, func() bool { return e.activePhysical() == 0 })
+	v1, _ := e.open("/tuner2/v7.1")
+	if v1 == nil {
+		t.Fatal("viewer refused")
+	}
+	defer v1.close()
+	v1.read(t, 188*20)
+	if code := post(); code != 200 {
+		t.Fatalf("rescan with one device busy: %d", code)
+	}
+	if n, _ := e.fakes[0].ScanRequests(); n != 1 {
+		t.Fatalf("the idle device should have scanned: %d", n)
+	}
+	waitFor(t, "the scan to finish", 5*time.Second, func() bool {
+		var s map[string]any
+		getJSON(t, e.api+"/lineup_status.json", &s)
+		return s["ScanInProgress"] == float64(0)
+	})
+	time.Sleep(2200 * time.Millisecond) // the tuners rest briefly after a scan
+	v0, _ := e.open("/tuner0/v7.1")
+	if v0 == nil {
+		t.Fatal("viewer refused")
+	}
+	defer v0.close()
+	v0.read(t, 188*20)
+	if code := post(); code != 409 {
+		t.Fatalf("rescan with every device busy: %d, want 409", code)
+	}
+	if n, _ := e.fakes[1].ScanRequests(); n != 1 {
+		t.Errorf("a busy device was asked to scan: %d", n)
 	}
 }
