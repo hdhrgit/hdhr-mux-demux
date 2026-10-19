@@ -190,7 +190,6 @@ function updateActivity(a) {
       <small>${phys(s.tuner, s.physicalUrl)} · ${mhz(s.frequency)} · ${(s.rxBps / 1e6).toFixed(1)} Mbps</small></div></div>`).join('')}</div>` : '');
   const sy = a.system;
   if (sy) {
-    patch($('#warn-wrap'), (sy.warnings || []).map((w) => `<div class="banner warn" role="status"><b>Heads up</b><p>${esc(w)}</p></div>`).join(''));
     const mb = (n) => (n / 1048576).toFixed(0);
     patch($('#sys-wrap'), `<div class="section-title">This machine</div><div class="cards sys">` +
       statCard('CPU', sy.cpuPercent.toFixed(0), '%', `of one core, last minute · ${sy.cores} core${sy.cores === 1 ? '' : 's'}`) +
@@ -207,7 +206,6 @@ function updateActivity(a) {
 function renderActivity(root) {
   root.innerHTML = `<div class="page-title"><h1>Activity</h1><p>Who is watching what, right now.</p></div>
     <div class="cards" id="stats">${'<div class="skeleton"></div>'.repeat(5)}</div>
-    <div id="warn-wrap"></div>
     <div class="section-title">Active tuners <span class="count" id="n-active">–</span></div>
     <div class="tuners" id="tuners"></div><div id="idle-wrap"></div><div id="bg-wrap"></div><div class="counters" id="counters"></div><div id="sys-wrap"></div>`;
   const tick = async () => {
