@@ -249,7 +249,11 @@ func (v *VTuner) joinHTTP(ctx context.Context, spec chanmap.Spec, program uint16
 	}
 	o := v.opts(program, service)
 	v.mu.Lock()
-	ok := v.tuned && v.sub != nil && v.autoOwned && !v.lockedLocked() && v.sub.Key() == v.d.hub.KeyFor(spec, o)
+	// A tuner somebody asked for directly (tvheadend over the control protocol, or
+	// by number) can be joined too when AutoJoinDirect is on: a viewer does not
+	// retune the tuner, so its owner's lock does not matter.
+	shareable := v.autoOwned && !v.lockedLocked() || v.d.cfg.AutoJoinDirect
+	ok := v.tuned && v.sub != nil && shareable && v.sub.Key() == v.d.hub.KeyFor(spec, o)
 	v.mu.Unlock()
 	v.op.Unlock()
 	if !ok {
@@ -396,14 +400,14 @@ func (v *VTuner) endHTTP(sub *hub.Sub) {
 // reap releases tuners left tuned with nobody using them.
 func (v *VTuner) reap(idle time.Duration) {
 	v.mu.Lock()
-	stale := v.tuned && v.snd == nil && !v.httpUse && time.Since(v.lastUse) > idle
+	stale := v.tuned && v.snd == nil && !v.httpUse && len(v.httpSubs) == 0 && time.Since(v.lastUse) > idle
 	v.mu.Unlock()
 	if !stale || !v.op.TryLock() {
 		return
 	}
 	defer v.op.Unlock()
 	v.mu.Lock()
-	stale = v.tuned && v.snd == nil && !v.httpUse && time.Since(v.lastUse) > idle
+	stale = v.tuned && v.snd == nil && !v.httpUse && len(v.httpSubs) == 0 && time.Since(v.lastUse) > idle
 	v.mu.Unlock()
 	if stale {
 		v.releaseAll(false)
@@ -617,6 +621,7 @@ func (v *VTuner) set(remote net.IP, name, value string, key *uint32) (string, er
 			// and the others must keep their stream: a clear from one of them (or from
 			// anybody) does not end the viewing of the rest.
 			if watchers > 0 {
+				v.adoptViewers()
 				return value, nil
 			}
 			v.stopStreamKeepTarget()
@@ -670,7 +675,7 @@ func (v *VTuner) set(remote net.IP, name, value string, key *uint32) (string, er
 			}
 		} else {
 			v.mu.Lock()
-			v.applyFilterLocked()
+			v.ctlFilterLocked()
 			v.mu.Unlock()
 		}
 	case "filter":
@@ -680,7 +685,7 @@ func (v *VTuner) set(remote net.IP, name, value string, key *uint32) (string, er
 		}
 		v.mu.Lock()
 		v.pids, v.explicit, v.program = set, true, 0
-		v.applyFilterLocked()
+		v.ctlFilterLocked()
 		v.mu.Unlock()
 	case "target":
 		return v.setTarget(value)
@@ -783,6 +788,41 @@ func (v *VTuner) carries(spec chanmap.Spec) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	return v.tuned && v.spec.Key() == spec.Key()
+}
+
+// adoptViewers (op held) is what a control client letting go of a tuner that HTTP
+// viewers joined means: the viewers keep it. Its own subscription and sender go,
+// the first viewer's stream represents the tuner, and the tuner is released with
+// the last viewer, as if they had opened it.
+func (v *VTuner) adoptViewers() {
+	v.mu.Lock()
+	if len(v.httpSubs) == 0 || v.sub == v.httpSubs[0] || v.httpOpened {
+		v.mu.Unlock()
+		return
+	}
+	old, snd := v.sub, v.snd
+	v.sub, v.snd = v.httpSubs[0], nil
+	v.httpOpened, v.httpUse, v.autoOwned = true, true, true
+	v.program, v.explicit, v.vchannel = 0, false, ""
+	v.lockkey, v.lockIP = 0, ""
+	v.mu.Unlock()
+	if snd != nil {
+		snd.stop()
+	}
+	if old != nil {
+		old.Close()
+	}
+}
+
+// ctlFilterLocked applies a control client's filter to the tuner's own
+// subscription, but never to a viewer's stream.
+func (v *VTuner) ctlFilterLocked() {
+	for _, s := range v.httpSubs {
+		if s == v.sub {
+			return
+		}
+	}
+	v.applyFilterLocked()
 }
 
 // stopStreamKeepTarget implements "set channel none".

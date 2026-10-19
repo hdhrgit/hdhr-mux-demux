@@ -36,6 +36,7 @@
     "parallel": 3
   },
 
+  "auto_join_direct": true,
   "linger": "5s",
   "client_buffer_mb": 16,
   "idle_release": "60s"

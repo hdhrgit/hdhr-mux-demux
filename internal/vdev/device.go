@@ -72,6 +72,9 @@ type Config struct {
 	// anything else (the default here) runs the multiplexer's own scan on every
 	// free tuner.
 	ScanMode string
+	// AutoJoinDirect lets an /auto/ request join a tuner a direct client already
+	// holds on the same channel.
+	AutoJoinDirect bool
 	// ScanPollInterval, if set, replaces the interval at which a device scan is polled.
 	ScanPollInterval time.Duration
 	// NoATSC3SSDP leaves the ATSC 3.0 primary device out of the announcements.

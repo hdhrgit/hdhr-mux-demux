@@ -74,9 +74,15 @@ over the LAN instead of 19; a lingering stream nobody watches drops to the table
   virtual tuner (each with its own program filter); that is how tuners are saved.
 * **Direct requests are trusted.** A client that asks for a tuner by number (HTTP `/tunerN/`, or the
   control protocol: tvheadend, `hdhomerun_config`, which lock it and may receive over UDP/RTP) gets
-  that tuner and keeps it, as on a real HomeRun; nobody else is attached to it. Sharing happens
-  between `/auto/` requests only (Channels DVR, the playlist, DLNA): they join each other, never a
-  tuner somebody asked for directly.
+  that tuner and keeps it, as on a real HomeRun; nobody else is attached to it. A direct client
+  never joins anybody: it is refused (`804`, or "resource locked") when its tuner is busy.
+  `/auto/` requests (Channels DVR, the playlist, DLNA) join each other, and with
+  **`auto_join_direct`** (default `true`) they also join a tuner a direct client already holds on
+  the same RF channel instead of taking another one. The viewer gets its own programme whatever
+  the direct client's PID filter does, and keeps the tuner if that client lets go of it (then it is
+  released with the last viewer). While `/auto/` viewers are on it the direct client cannot retune
+  it (it is told the resource is locked), as on a real device. Set it to `false` to keep direct
+  clients' tuners strictly to themselves.
 * **`/auto/` maximises free tuners.** It first reuses a tuner that already carries
   the channel (busy, or still lingering on it); only if there is none does it open
   a new one, choosing the one that hurts future requests least:
@@ -269,6 +275,7 @@ See [config.example.json](config.example.json). Notable keys:
 * `upstream.mode` – `http` (default) or `rtp`/`udp` (device pushes to this
   host; needs inbound UDP).
 * `linger` (5 s, `-1s` to disable), `client_buffer_mb` (16), `idle_release`.
+* `auto_join_direct` (true): an `/auto/` request joins a tuner a direct client (tvheadend, `/tunerN/`) already holds on the same channel.
 
 ### Web interface (`/ui/`)
 

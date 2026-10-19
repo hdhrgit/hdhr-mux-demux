@@ -63,6 +63,11 @@ type Config struct {
 	Guide Guide `json:"guide"`
 
 	Linger Duration `json:"linger"` // keep an unused physical tuner tuned this long (default 5s, -1s disables)
+	// AutoJoinDirect (default true): an /auto/ request for a channel a direct client
+	// (tvheadend over the control protocol, or a request for a tuner by number) is
+	// already receiving joins that tuner instead of taking another. Never the other
+	// way round: a direct client does not join an /auto/ stream.
+	AutoJoinDirect *bool `json:"auto_join_direct"`
 	// ClientBufferMB is the per-client queue for slow consumers (default 16).
 	ClientBufferMB int      `json:"client_buffer_mb"`
 	IdleRelease    Duration `json:"idle_release"` // free tuners left tuned without a viewer
@@ -199,6 +204,10 @@ func Load(path string) (*Config, error) {
 	if c.Discoverable == nil {
 		t := true
 		c.Discoverable = &t
+	}
+	if c.AutoJoinDirect == nil {
+		t := true
+		c.AutoJoinDirect = &t
 	}
 	applyEnv(c)
 	if c.StreamListen == "" {

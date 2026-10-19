@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2552,4 +2553,84 @@ func TestActivityNamesTheChannelAPIDClientWatches(t *testing.T) {
 		getJSON(t, e.api+"/ui/api/activity", &a)
 		return len(a.Tuners[0].Viewers) == 1 && a.Tuners[0].Viewers[0].Channel == "EPG scan" && a.Tuners[0].Viewers[0].Name == "177 MHz"
 	})
+}
+
+// tvheadend (control protocol, picks PIDs) holds a tuner; an /auto/ request for a
+// channel on it joins that tuner instead of taking another, when auto_join_direct
+// is on. The joiner gets its own programme whatever the filter does, and keeps the
+// tuner when tvheadend lets go.
+func TestAutoJoinsADirectClient(t *testing.T) {
+	for _, join := range []bool{true, false} {
+		t.Run(fmt.Sprintf("join=%v", join), func(t *testing.T) {
+			e := setup(t, []int{3}, 3, func(c *vdev.Config) { c.AutoJoinDirect = join })
+			ctl := hdhrproto.NewControl(e.ctl)
+			defer ctl.Close()
+			rx, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rx.Close()
+			var udp atomic.Int64
+			go func() {
+				buf := make([]byte, 2048)
+				for {
+					n, _, err := rx.ReadFromUDP(buf)
+					if err != nil {
+						return
+					}
+					udp.Add(int64(n))
+				}
+			}()
+			set := func(name, val string) {
+				t.Helper()
+				if _, err := ctl.Set(name, val, 0); err != nil {
+					t.Fatalf("set %s %s: %v", name, val, err)
+				}
+			}
+			set("/tuner0/channel", "auto:177000000")
+			set("/tuner0/filter", "0x0000 0x0100-0x0102")
+			set("/tuner0/target", "udp://"+rx.LocalAddr().String())
+			waitFor(t, "tvheadend's stream", 4*time.Second, func() bool { return udp.Load() > 188*50 })
+
+			c, rc := e.open("/auto/v7.2")
+			if c == nil {
+				t.Fatal("/auto/ refused")
+			}
+			defer c.close()
+			if an := analyze(t, c.read(t, 188*100)); !an.esProgs[2] || an.esProgs[1] || an.ccErrors != 0 {
+				t.Fatalf("the joiner got %v (cc=%d)", an.esProgs, an.ccErrors)
+			}
+			res := rc.Header.Get("X-HDHomeRun-Resource")
+			if join {
+				if res != "tuner0" || e.activePhysical() != 1 {
+					t.Fatalf("/auto/ should ride on tuner0: %q, %d physical tuners", res, e.activePhysical())
+				}
+			} else {
+				if res == "tuner0" || e.activePhysical() != 2 {
+					t.Fatalf("/auto/ should take its own tuner: %q, %d physical tuners", res, e.activePhysical())
+				}
+				return
+			}
+
+			// tvheadend goes on receiving, and changing its filter leaves the viewer alone
+			before := udp.Load()
+			set("/tuner0/filter", "0x0000 0x0100-0x0102 0x0110-0x0112")
+			if an := analyze(t, c.read(t, 188*200)); !an.esProgs[2] || an.esProgs[1] || an.ccErrors != 0 {
+				t.Fatalf("the joiner after the filter change: %v (cc=%d)", an.esProgs, an.ccErrors)
+			}
+			waitFor(t, "tvheadend still receiving", 3*time.Second, func() bool { return udp.Load() > before+188*50 })
+
+			// tvheadend lets go: the viewer keeps the tuner, and it is freed with the viewer
+			set("/tuner0/target", "none")
+			set("/tuner0/channel", "none")
+			if an := analyze(t, c.read(t, 188*200)); !an.esProgs[2] || an.ccErrors != 0 {
+				t.Fatalf("the joiner after tvheadend let go: %v (cc=%d)", an.esProgs, an.ccErrors)
+			}
+			if n := e.activePhysical(); n != 1 {
+				t.Fatalf("%d physical tuners after tvheadend let go, want 1", n)
+			}
+			c.close()
+			waitFor(t, "the tuner freed with its last viewer", 4*time.Second, func() bool { return e.activePhysical() == 0 })
+		})
+	}
 }
