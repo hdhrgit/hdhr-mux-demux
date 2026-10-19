@@ -166,10 +166,11 @@ function updateActivity(a) {
     const h = history.get(t.index) || [];
     h.push(t.rxBps); if (h.length > HIST) h.shift(); history.set(t.index, h);
   }
-  const use = S.tuners ? pct(S.tunersInUse / S.tuners * 100) : 0;
+  const busy = S.tunersInUse + S.otherTuners; // in use by anybody
+  const useMine = S.tuners ? pct(S.tunersInUse / S.tuners * 100) : 0, useOther = S.tuners ? pct(S.otherTuners / S.tuners * 100) : 0;
   patch($('#stats'),
     statCard('Watching now', S.viewers, S.viewers === 1 ? 'viewer' : 'viewers', S.viewers ? `on ${S.tunersInUse} tuner${S.tunersInUse === 1 ? '' : 's'}` : 'nobody is watching', '', 'accent') +
-    statCard('Tuners in use', S.tunersInUse, `/ ${S.tuners}`, `${S.tuners - S.tunersInUse - S.otherTuners} free${S.otherTuners ? ` · ${S.otherTuners} used by other apps` : ''}`, `<div class="bar"><i style="width:${use}%"></i></div>`) +
+    statCard('Tuners in use', busy, `/ ${S.tuners}`, `${S.tuners - busy} free${busy ? ` · ${S.tunersInUse} here, ${S.otherTuners} by other apps` : ''}`, `<div class="bar"><i style="width:${useMine}%"></i><i class="other" style="width:${useOther}%"></i></div>`) +
     statCard('From the tuners', mbps(S.rxBps), 'Mbps', 'pulled over the network') +
     statCard('To viewers', mbps(S.txBps), 'Mbps', S.rxBps > 0 && S.txBps > S.rxBps * 1.1 ? `${(S.txBps / S.rxBps).toFixed(1)}× shared` : 'delivered') +
     statCard('Devices', S.physicalOnline, `/ ${S.physical}`, S.physicalOnline === S.physical ? 'all tuners online' : `${S.physical - S.physicalOnline} offline`));
