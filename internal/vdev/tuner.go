@@ -294,6 +294,11 @@ type ViewerRow struct {
 	Queue   int // % of the client buffer in use
 	Drops   uint64
 	Control bool // a control-protocol client (target=...) rather than HTTP
+	// Alt lists the channels the client may be watching when they cannot be told
+	// apart (the same audio and video under two numbers); Label is the first.
+	// Inferred: the channel is a guess from the PIDs the client asked for.
+	Alt      []string
+	Inferred bool
 }
 
 // viewerRows lists the clients currently attached to the tuner.
@@ -331,17 +336,22 @@ func (v *VTuner) viewerRows() []ViewerRow {
 		if c := cap(sub.C); c > 0 {
 			q = sub.Buffered() * 100 / c
 		}
-		labels := []string{vch}
+		var groups [][]string
 		if vch == "" {
-			// A client that selects PIDs rather than a channel (tvheadend): the
-			// channels are the programmes its filter includes completely.
-			labels = v.inferredChannels(sub, spec)
-			if len(labels) == 0 {
-				labels = []string{spec.String()}
-			}
+			// A client that selects PIDs rather than a channel (tvheadend): a guess,
+			// the programmes its filter includes completely, those that cannot be told
+			// apart together.
+			groups = v.inferredChannels(sub, spec)
 		}
-		for i, label := range labels {
-			row := ViewerRow{Client: host, Label: label, Since: since, Queue: q, Drops: sub.Drops(), Control: true}
+		if len(groups) == 0 {
+			label := vch
+			if label == "" {
+				label = spec.String()
+			}
+			rows = append(rows, ViewerRow{Client: host, Label: label, Since: since, BPS: bps, Queue: q, Drops: sub.Drops(), Control: true})
+		}
+		for i, g := range groups {
+			row := ViewerRow{Client: host, Label: g[0], Alt: g, Inferred: true, Since: since, Queue: q, Drops: sub.Drops(), Control: true}
 			if i == 0 {
 				row.BPS = bps // one stream: counted once
 			}
@@ -714,17 +724,24 @@ func (v *VTuner) channelmapNow() string {
 	return v.channelmap
 }
 
-// inferredChannels names the channels a client that selects PIDs rather than a
-// channel (tvheadend) is watching: the programmes its filter includes completely
-// (guide numbers, in programme order).
-func (v *VTuner) inferredChannels(sub *hub.Sub, spec chanmap.Spec) []string {
+// inferredChannels guesses the channels a client that selects PIDs rather than a
+// channel (tvheadend) is watching: the programmes its filter includes completely,
+// as groups of guide numbers (programmes with the same audio and video are one
+// group: there is no telling which one it is).
+func (v *VTuner) inferredChannels(sub *hub.Sub, spec chanmap.Spec) [][]string {
 	if sub == nil {
 		return nil
 	}
-	var out []string
-	for _, p := range sub.WatchedPrograms() {
-		if num, _, ok := v.d.lineup.ProgramName(spec.Frequency, p); ok {
-			out = append(out, num)
+	var out [][]string
+	for _, g := range sub.WatchedProgramGroups() {
+		var nums []string
+		for _, p := range g {
+			if num, _, ok := v.d.lineup.ProgramName(spec.Frequency, p); ok {
+				nums = append(nums, num)
+			}
+		}
+		if len(nums) > 0 {
+			out = append(out, nums)
 		}
 	}
 	return out
@@ -735,9 +752,9 @@ func (v *VTuner) inferredChannel(sub *hub.Sub, spec chanmap.Spec) (num, name str
 	if sub == nil {
 		return "", "", false
 	}
-	for _, p := range sub.WatchedPrograms() {
-		if num, name, ok := v.d.lineup.ProgramName(spec.Frequency, p); ok {
-			return num, name, true
+	for _, g := range v.inferredChannels(sub, spec) {
+		if e, ok := v.d.lineup.Find(g[0]); ok {
+			return g[0], e.GuideName, true
 		}
 	}
 	return "", "", false

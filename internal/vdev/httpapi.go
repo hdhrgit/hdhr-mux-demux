@@ -328,16 +328,23 @@ func (d *Device) handleTunersHTML(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "<tr><td>tuner%d<td>%s<td>%s<td>%d<td>", rw.v.idx, html.EscapeString(rw.phys),
 				html.EscapeString(rw.v.statusString()), len(rw.viewers))
 			for _, vw := range rw.viewers {
-				name := ""
+				name, label := "", vw.Label
 				if e, ok := d.lineup.Find(vw.Label); ok {
 					name = " " + e.GuideName
 				}
+				if len(vw.Alt) > 1 { // a guess that cannot tell these apart
+					label = strings.Join(vw.Alt, " / ")
+				}
 				kind := ""
 				if vw.Control {
-					kind = " (control)"
+					kind = " (control"
+					if vw.Inferred {
+						kind += ", channel guessed from its PIDs"
+					}
+					kind += ")"
 				}
 				fmt.Fprintf(w, "%s%s &mdash; %s%s &mdash; %s &mdash; %.1f Mbps &mdash; buffer %d%%, dropped %d<br>",
-					html.EscapeString(vw.Label), html.EscapeString(name), html.EscapeString(vw.Client), kind,
+					html.EscapeString(label), html.EscapeString(name), html.EscapeString(vw.Client), kind,
 					time.Since(vw.Since).Round(time.Second), float64(vw.BPS)/1e6, vw.Queue, vw.Drops)
 			}
 		}

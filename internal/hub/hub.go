@@ -436,34 +436,67 @@ func (s *Sub) SetFilter(set ts.PIDSet) {
 // which clients pass to discover what is there. Ascending; empty when
 // everything is received (no filter) or nothing is complete.
 func (s *Sub) WatchedPrograms() []uint16 {
+	var out []uint16
+	for _, g := range s.WatchedProgramGroups() {
+		out = append(out, g...)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// WatchedProgramGroups is WatchedPrograms with the programmes that cannot be told
+// apart put together: some stations carry the same audio and video under two
+// programme numbers (9.1 and 54.2 on KQED), and a client that picks PIDs may be
+// watching either. Each group is ascending, the groups by their first programme.
+func (s *Sub) WatchedProgramGroups() [][]uint16 {
 	st := s.st
 	st.fmu.Lock()
 	defer st.fmu.Unlock()
 	switch s.mode {
 	case modeProgram:
-		return []uint16{s.program}
+		return [][]uint16{{s.program}}
 	case modePIDs:
-		var out []uint16
+		byPIDs := map[string][]uint16{}
 		for prog, pmt := range st.pmts {
-			n, all := 0, true
+			var pids []int
+			all := true
 			for _, pid := range pmt.PIDs() {
 				if pid == st.programs[prog] {
 					continue
 				}
-				n++
 				if !s.pids.Has(pid) {
 					all = false
 					break
 				}
+				pids = append(pids, int(pid))
 			}
-			if all && n > 0 {
-				out = append(out, prog)
+			if !all || len(pids) == 0 {
+				continue
 			}
+			sort.Ints(pids)
+			key := fmt.Sprint(compact(pids))
+			byPIDs[key] = append(byPIDs[key], prog)
 		}
-		sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+		var out [][]uint16
+		for _, g := range byPIDs {
+			sort.Slice(g, func(i, j int) bool { return g[i] < g[j] })
+			out = append(out, g)
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i][0] < out[j][0] })
 		return out
 	}
 	return nil
+}
+
+// compact removes repeats from a sorted slice.
+func compact(a []int) []int {
+	out := a[:0:0]
+	for i, v := range a {
+		if i == 0 || v != a[i-1] {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // Program returns the selected program (0 if none).
