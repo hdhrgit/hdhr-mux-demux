@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -97,10 +98,11 @@ func (h *Hub) Scan(ctx context.Context, cfg ScanConfig, progress func(Progress))
 	go func() { pending.Wait(); close(allDone) }()
 
 	var (
-		mu    sync.Mutex
-		found []lineup.Entry
-		done  int
-		wg    sync.WaitGroup
+		mu     sync.Mutex
+		found  []lineup.Entry
+		needs3 []uint64 // strong signal, no lock, and no ATSC 3.0 tuner was free to try
+		done   int
+		wg     sync.WaitGroup
 	)
 	// next hands a worker its next channel: capable tuners take the hand-offs
 	// first; everyone else only draws from the general queue.
@@ -146,6 +148,11 @@ func (h *Hub) Scan(ctx context.Context, cfg ScanConfig, progress func(Progress))
 						continue
 					}
 					es, _ = scanChannel(ctx, w.lease, cfg, ch) // ATSC 3.0 sometimes needs a second try
+					if len(es) == 0 && !w.capable && !anyCapable {
+						mu.Lock()
+						needs3 = append(needs3, ch.Frequency)
+						mu.Unlock()
+					}
 				}
 				mu.Lock()
 				found = append(found, es...)
@@ -163,6 +170,10 @@ func (h *Hub) Scan(ctx context.Context, cfg ScanConfig, progress func(Progress))
 	wg.Wait()
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
+	}
+	if len(needs3) > 0 {
+		sort.Slice(needs3, func(i, j int) bool { return needs3[i] < needs3[j] })
+		log.Printf("scan: %d channel(s) have a signal but need an ATSC 3.0 tuner and none was free, so any ATSC 3.0 services on %v were not scanned (tuners 0 and 1 of a 4K device are the capable ones; a viewer on them blocks it). Channels already in the lineup stay.", len(needs3), needs3)
 	}
 	out := mergeEntries(found)
 	return out, nil

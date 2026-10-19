@@ -8,12 +8,14 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -3128,3 +3130,64 @@ func TestSignalQualityZeroIsHiddenAtStart(t *testing.T) {
 		})
 	}
 }
+
+// With lineup.atsc3 off the ATSC 3.0 channels are left out of the listings (lineup,
+// playlist, guide) but a client that asks for one by number is still served.
+func TestHidingATSC3LeavesThemUnlistedButTunable(t *testing.T) {
+	e := setup(t, []int{3}, 3, func(c *vdev.Config) { c.HideATSC3 = true })
+	e.lu.Replace(append(append([]lineup.Entry{}, testLineup...), atsc3Lineup...))
+	for _, path := range []string{"/lineup.json", "/playlist.m3u8", "/epg"} {
+		r, err := http.Get(e.api + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(r.Body)
+		r.Body.Close()
+		if strings.Contains(string(b), "104.1") || strings.Contains(string(b), "NEXT-A") {
+			t.Errorf("%s lists an ATSC 3.0 channel", path)
+		}
+		if path != "/epg" && !strings.Contains(string(b), "7.1") {
+			t.Errorf("%s lost the ATSC 1.0 channels", path)
+		}
+	}
+	c, rc := e.open("/auto/v104.1")
+	if c == nil {
+		t.Fatalf("a hidden ATSC 3.0 channel was not served: %d %v", rc.StatusCode, rc.Header)
+	}
+	c.close()
+}
+
+// An own scan with no ATSC 3.0 tuner to hand a strong-but-unlockable channel to says
+// so, instead of silently missing it.
+func TestScanSaysWhenATSC3ChannelsWereNotScanned(t *testing.T) {
+	e := setup(t, []int{4}, 4, nil)
+	// viewers hold tuners 0 and 1, the ones that can lock ATSC 3.0, so the scan only gets 2 and 3
+	ctl := hdhrproto.NewControl(e.ctl)
+	defer ctl.Close()
+	for i, f := range []string{"auto:177000000", "auto:473000000"} {
+		if _, err := ctl.Set(fmt.Sprintf("/tuner%d/channel", i), f, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var buf syncLog
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	_, err := e.hub.Scan(context.Background(), hub.ScanConfig{
+		Channels: []chanmap.Channel{{Number: 1, Frequency: 605000000}, {Number: 2, Frequency: 177000000}},
+		LockWait: 300 * time.Millisecond, InfoWait: 500 * time.Millisecond,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := buf.String(); !strings.Contains(s, "need an ATSC 3.0 tuner and none was free") || !strings.Contains(s, "605000000") {
+		t.Errorf("the scan did not say it missed ATSC 3.0 channels:\n%s", s)
+	}
+}
+
+type syncLog struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncLog) Write(p []byte) (int, error) { s.mu.Lock(); defer s.mu.Unlock(); return s.b.Write(p) }
+func (s *syncLog) String() string              { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }

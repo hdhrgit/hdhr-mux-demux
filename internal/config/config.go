@@ -150,6 +150,9 @@ type Lineup struct {
 	ScanMode string `json:"scan_mode"`
 	// ScanTuners limits tuners used per device by a scan (0 = every free one).
 	ScanTuners int `json:"scan_tuners_per_device"`
+	// ATSC3 (default true) lists ATSC 3.0 channels in the lineup, playlist and guide; false
+	// leaves them out of the listings (they still tune when asked for by number).
+	ATSC3 *bool `json:"atsc3"`
 }
 
 // applyEnv lets the environment override the file, using the same variable
@@ -285,6 +288,10 @@ func loadConfig(path string, overlay []byte, env bool) (*Config, error) {
 	if c.EvictScans == nil {
 		t := true
 		c.EvictScans = &t
+	}
+	if c.Lineup.ATSC3 == nil {
+		t := true
+		c.Lineup.ATSC3 = &t
 	}
 	// The streams must not travel the internet at large (the devices push a lot of
 	// bandwidth, which would make a fine weapon): 3 unless set, never more than 8.

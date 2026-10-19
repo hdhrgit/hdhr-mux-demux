@@ -83,6 +83,8 @@ type Config struct {
 	// EvictScans lets an /auto/ request that finds every tuner busy take one from a
 	// control client that is only collecting tables (a guide or channel scan).
 	EvictScans bool
+	// HideATSC3 leaves ATSC 3.0 channels out of the listings.
+	HideATSC3 bool
 	// ScanGrace is how long a control client has to hold a filter that completes no
 	// programme before it counts as scanning (default 10 s): a client about to
 	// watch sets such a filter too, for a moment, while it reads the PMTs.
@@ -212,6 +214,7 @@ func New(cfg Config, h *hub.Hub, lu *lineup.Lineup) (*Device, error) {
 	}
 	d := &Device{cfg: cfg, hub: h, lineup: lu, quit: make(chan struct{}), source: cfg.DefaultSource}
 	d.live.init(liveOf(&cfg))
+	lu.SetHideATSC3(cfg.HideATSC3)
 	resetStreamCounts() // the counters are process-wide; a new device starts them afresh
 	h.SetLearner(d.learn)
 	for i := 0; i < cfg.Tuners; i++ {
