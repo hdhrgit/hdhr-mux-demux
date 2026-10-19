@@ -17,23 +17,10 @@ contents:
     dst: /usr/bin/hdhr-mux
     file_info:
       mode: 0755
-  - src: dist/bin/linux-${GOARCH}${GOARM}/hdhrctl
-    dst: /usr/bin/hdhrctl
-    file_info:
-      mode: 0755
   - src: packaging/hdhr-mux.service
     dst: /lib/systemd/system/hdhr-mux.service
     file_info:
       mode: 0644
-  - src: packaging/config.json
-    dst: /etc/hdhr-mux/config.json
-    type: config|noreplace
-    file_info:
-      mode: 0644
-  - src: config.example.json
-    dst: /usr/share/doc/hdhr-mux/config.example.json
-  - src: README.md
-    dst: /usr/share/doc/hdhr-mux/README.md
 scripts:
   postinstall: packaging/postinstall.sh
   preremove: packaging/preremove.sh

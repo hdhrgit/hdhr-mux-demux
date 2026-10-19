@@ -278,11 +278,14 @@ port 80.
 | Docker | `docker run -d --name hdhr-mux --network host --restart unless-stopped -v hdhr-mux-state:/var/lib/hdhr-mux ghcr.io/hdhrgit/hdhr-mux` (linux/amd64, arm64, arm/v7). Works with no config file: pass `-e HDHOMERUN_DEVICES=ip,ip` or use the Settings page. |
 | Debian, Ubuntu, Raspberry Pi OS | `sudo apt install ./hdhr-mux_VERSION_ARCH.deb` (amd64, arm64, armhf) |
 | Fedora, RHEL, Rocky, openSUSE | `sudo dnf install ./hdhr-mux-VERSION-1.ARCH.rpm` (x86_64, aarch64, armv7hl) |
-| Any Linux | the tarball: binaries, `config.example.json` and a systemd unit |
+| Any Linux | the tarball: the binary and its systemd unit |
 
-Packages install `/usr/bin/hdhr-mux`, a systemd unit running as the `hdhr-mux` user, a small
-`/etc/hdhr-mux/config.json` (kept on upgrade) and the state directory `/var/lib/hdhr-mux`. Then:
-`sudo systemctl enable --now hdhr-mux` and open `http://HOST/ui/`. `scripts/release.sh VERSION` builds all of
+A package is the binary (`/usr/bin/hdhr-mux`) and a systemd unit, nothing else. The unit runs the
+service as a private user systemd creates for it (`DynamicUser`), so there is no account to create or
+clean up, and keeps its state (lineup, guide, saved settings) in `/var/lib/hdhr-mux`. There is no config
+file: everything has a default and the Settings page saves what you change. If you want one, create
+`/etc/hdhr-mux/config.json` (it is read when it exists; see `config.example.json` in the repository).
+Then: `sudo systemctl enable --now hdhr-mux` and open `http://HOST/ui/`. `scripts/release.sh VERSION` builds all of
 them (tarballs, deb, rpm for the three architectures) with nothing but Docker; the release workflow
 does that, and pushes the multi-architecture image, when a `vX.Y.Z` tag is pushed.
 
@@ -449,7 +452,7 @@ Changing the tuner list renumbers the virtual tuners.
 
 ## Tools
 
-* `cmd/hdhrctl` – `discover`, `get`, `set` (`HDHR_LOCKKEY=n` sends a lockkey),
+* `cmd/hdhrctl` (a development tool, not in the packages: `go build ./cmd/hdhrctl`) – `discover`, `get`, `set` (`HDHR_LOCKKEY=n` sends a lockkey),
   `save N SECONDS` against a physical device or the multiplexer.
 * `cmd/tscheck` – reads a transport stream on stdin and reports PIDs,
   continuity errors and the programs in the PAT/PMT.
