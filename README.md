@@ -151,7 +151,8 @@ http://MUX:5004/auto/v7.1
 `/playlist.m3u8`, `/playlist.m3u`, `/lineup.m3u` and `/lineup.m3u8` are the same UTF-8 file. It is a
 playlist of channels, not HLS: each URL is the usual MPEG transport stream over HTTP, served from a
 shared tuner. `tvg-id` is the guide number, which is also the channel id in the XMLTV guide on
-`/epg` (the header points players at it), so the programme guide lines up. Channels with DRM are left out.
+`/epg` (the header points players at it), so the programme guide lines up. Channels with DRM are left out. Channels that are not HD carry `group-id="SD"`, which is what
+Channels DVR looks for: without it every channel of an M3U source is labelled HD.
 
 Options: `?hd=1` only HD, `?favorites=1` only favourites, `?atsc3=0` leave out ATSC 3.0 channels,
 `?group=` sets `group-title`: `source` (default, e.g. "Antenna"), `rf` ("545 MHz"), `quality`

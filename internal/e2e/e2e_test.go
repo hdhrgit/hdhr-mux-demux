@@ -2268,6 +2268,10 @@ func TestPlaylistM3U(t *testing.T) {
 	if !strings.Contains(lines[3], `tvg-name="BE'TA, the second"`) || !strings.HasSuffix(lines[3], `,BE"TA, the second`) {
 		t.Errorf("quoting: %s", lines[3])
 	}
+	// only the channels that are not HD are marked SD (the way Channels DVR wants it)
+	if strings.Count(body, `group-id="SD"`) != 1 || !strings.Contains(lines[3], `group-id="SD"`) || strings.Contains(lines[1], "group-id") {
+		t.Errorf("SD marking:\n%s", body)
+	}
 	if strings.Contains(body, "SCRAMBLED") {
 		t.Error("DRM channel listed")
 	}
