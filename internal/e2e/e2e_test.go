@@ -2499,3 +2499,48 @@ func TestClearingASharedTunerKeepsTheOtherViewers(t *testing.T) {
 		t.Fatalf("channel none on an idle tuner: %v", err)
 	}
 }
+
+// A control client that picks PIDs (tvheadend) never says which channel it is
+// watching; the activity page works it out from the programme its PIDs belong to.
+func TestActivityNamesTheChannelAPIDClientWatches(t *testing.T) {
+	e := setup(t, []int{2}, 2, nil)
+	ctl := hdhrproto.NewControl(e.ctl)
+	defer ctl.Close()
+	rx, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rx.Close()
+	set := func(name, val string) {
+		t.Helper()
+		if _, err := ctl.Set(name, val, 0); err != nil {
+			t.Fatalf("set %s %s: %v", name, val, err)
+		}
+	}
+	set("/tuner0/channel", "auto:177000000")
+	// the PAT, the PMTs it wants to look at, and the video and audio of the second programme (7.2)
+	set("/tuner0/filter", "0x0000 0x0100 0x0110 0x0111-0x0112")
+	set("/tuner0/target", "udp://"+rx.LocalAddr().String())
+
+	var a struct {
+		Tuners []struct {
+			State   string
+			Viewers []struct{ Channel, Name string }
+		}
+	}
+	waitFor(t, "the programme behind the filter", 6*time.Second, func() bool {
+		a.Tuners = nil
+		getJSON(t, e.api+"/ui/api/activity", &a)
+		return len(a.Tuners) > 0 && len(a.Tuners[0].Viewers) == 1 && a.Tuners[0].Viewers[0].Channel == "7.2"
+	})
+	if v := a.Tuners[0].Viewers[0]; v.Name != "BETA" {
+		t.Errorf("viewer %+v", v)
+	}
+	// discovery-only filters (PMTs but no elementary streams) name nothing
+	set("/tuner0/filter", "0x0000 0x0100 0x0110")
+	waitFor(t, "no programme claimed", 6*time.Second, func() bool {
+		a.Tuners = nil
+		getJSON(t, e.api+"/ui/api/activity", &a)
+		return len(a.Tuners[0].Viewers) == 1 && strings.HasPrefix(a.Tuners[0].Viewers[0].Channel, "auto")
+	})
+}

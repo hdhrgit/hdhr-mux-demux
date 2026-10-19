@@ -242,6 +242,8 @@ func (d *Device) handleStatus(w http.ResponseWriter, r *http.Request) {
 				if e, ok := d.lineup.Find(vch); ok {
 					s.VctName = e.GuideName
 				}
+			} else if num, name, ok := v.inferredChannel(sub, spec); ok {
+				s.VctNumber, s.VctName = num, name // a client that picks PIDs, not a channel
 			}
 			if i := strings.Index(tgt, "://"); i >= 0 {
 				host, _, _ := net.SplitHostPort(tgt[i+3:])

@@ -428,6 +428,34 @@ func (s *Sub) SetFilter(set ts.PIDSet) {
 	s.st.kickMask()
 }
 
+// WatchedPrograms says which programs of the stream the subscription is
+// receiving: the selected one, or, for a client that picks PIDs (tvheadend,
+// hdhomerun_config with "set filter"), the programs whose audio, video or PCR
+// PIDs are in its filter (the PMT PIDs alone do not count: clients pass those
+// to discover what is there). Ascending; empty when everything is received.
+func (s *Sub) WatchedPrograms() []uint16 {
+	st := s.st
+	st.fmu.Lock()
+	defer st.fmu.Unlock()
+	switch s.mode {
+	case modeProgram:
+		return []uint16{s.program}
+	case modePIDs:
+		var out []uint16
+		for prog, pmt := range st.pmts {
+			for _, pid := range pmt.PIDs() {
+				if pid != st.programs[prog] && s.pids.Has(pid) {
+					out = append(out, prog)
+					break
+				}
+			}
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+		return out
+	}
+	return nil
+}
+
 // Program returns the selected program (0 if none).
 func (s *Sub) Program() uint16 {
 	s.st.fmu.Lock()

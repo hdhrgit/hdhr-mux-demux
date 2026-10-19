@@ -329,6 +329,9 @@ func (v *VTuner) viewerRows() []ViewerRow {
 		label := vch
 		if label == "" {
 			label = spec.String()
+			if num, _, ok := v.inferredChannel(sub, spec); ok {
+				label = num
+			}
 		}
 		bps, _ := sub.Rate()
 		q := 0
@@ -701,6 +704,19 @@ func (v *VTuner) channelmapNow() string {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	return v.channelmap
+}
+
+// inferredChannel names the channel a client that selects PIDs rather than a
+// channel (tvheadend) is watching: whichever program those PIDs belong to.
+func (v *VTuner) inferredChannel(sub *hub.Sub, spec chanmap.Spec) (num, name string, ok bool) {
+	if sub == nil {
+		return "", "", false
+	}
+	progs := sub.WatchedPrograms()
+	if len(progs) == 0 {
+		return "", "", false
+	}
+	return v.d.lineup.ProgramName(spec.Frequency, progs[0])
 }
 
 // firstViewerLocked is the address of the oldest HTTP viewer (the one that holds
