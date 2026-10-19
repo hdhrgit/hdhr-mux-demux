@@ -138,7 +138,10 @@ a:hover { text-decoration: underline; }
 .stat .value small { font-size: 14px; font-weight: 500; color: var(--muted); margin-left: 4px; letter-spacing: 0; }
 .stat .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
 .stat .bar { height: 5px; border-radius: 99px; background: var(--bg-2); margin-top: 10px; overflow: hidden; }
-.stat .bar i { display: block; height: 100%; background: var(--accent); border-radius: 99px; transition: width .6s ease; }
+.stat .bar { display: flex; }
+.stat .bar i { display: block; height: 100%; background: var(--accent); transition: width .6s ease; }
+.stat .bar i.other { background: var(--warn); }
+.stat .bar i:first-child { border-radius: 99px 0 0 99px; } .stat .bar i:last-child { border-radius: 0 99px 99px 0; } .stat .bar i:only-child { border-radius: 99px; }
 .stat.accent .value { color: var(--accent); }
 
 .tuners { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr)); gap: 16px; align-items: start; }
