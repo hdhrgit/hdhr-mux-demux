@@ -148,6 +148,7 @@ func run() int {
 		AutoJoinDirect:         *cfg.AutoJoinDirect,
 		AutoJoinOtherLocations: *cfg.AutoJoinOtherLocations,
 		EvictScans:             *cfg.EvictScans,
+		HideATSC3:              !*cfg.Lineup.ATSC3,
 		StreamTTL:              *cfg.StreamTTL,
 		LineupRefresh:          refresh,
 		GuideRefresh:           guideRefresh,
