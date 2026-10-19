@@ -111,6 +111,7 @@ still share one) and the multiplexer does no demuxing there.
 | `target` as `udp://` or `rtp://` (7 TS packets per datagram, as libhdhomerun requires) | yes |
 | Lockkeys (`lockkey`, `force`, `lock no longer held`) | yes |
 | Port 80: `discover.json`, `lineup.json`, `lineup.xml`, `lineup_status.json`, `lineup.post?scan=…`, `status.json`, `device.xml`, `tuners.html` (every tuner with its channels, clients and their IPs), `lineup.html` | yes |
+| M3U/M3U8 playlist of the lineup on `/playlist.m3u8` (also `/playlist.m3u`, `/lineup.m3u`, `/lineup.m3u8`), for players that cannot use `lineup.json` or the HDHomeRun protocol | yes (extension, see below) |
 | Port 5004: `/auto/vX.Y`, `/tunerN/vX.Y`, `/auto/chFREQ[-PROGRAM]`, `?duration=`, real error headers (`801`, `804`–`807`) | yes |
 | DLNA/UPnP media server on `/dms` (SSDP announcements and search answers, `device.xml`, ContentDirectory with the `Favorites` and `Channels` containers, ConnectionManager), so TVs list the multiplexer as a video source and play its channels | yes (default interface only) |
 | Programme guide from the broadcasts (PSIP), XMLTV on `/epg`, JSON on `/epg.json` | yes (ATSC 1.0 only) |
@@ -135,6 +136,26 @@ sharing needs. That is learned, and remembered in `<state_dir>/lineup.json`:
   the first time a multiplex is used. If the first device does not know the channel
   the others are asked. Concurrent requests share one probe.
 * **From an explicit scan** (below), which locates everything at once.
+
+### Playlist (`/playlist.m3u8`)
+
+For VLC, Kodi, Jellyfin, Emby, TiviMate and other players or IPTV apps that cannot use `lineup.json`
+or the HDHomeRun protocol, the lineup is also served as an extended M3U playlist:
+
+```
+#EXTM3U url-tvg="http://MUX/epg" x-tvg-url="http://MUX/epg"
+#EXTINF:-1 tvg-id="7.1" tvg-chno="7.1" tvg-name="KGO-HD" group-title="Antenna",KGO-HD
+http://MUX:5004/auto/v7.1
+```
+
+`/playlist.m3u8`, `/playlist.m3u`, `/lineup.m3u` and `/lineup.m3u8` are the same UTF-8 file. It is a
+playlist of channels, not HLS: each URL is the usual MPEG transport stream over HTTP, served from a
+shared tuner. `tvg-id` is the guide number, which is also the channel id in the XMLTV guide on
+`/epg` (the header points players at it), so the programme guide lines up. Channels with DRM are left out.
+
+Options: `?hd=1` only HD, `?favorites=1` only favourites, `?atsc3=0` leave out ATSC 3.0 channels,
+`?group=` sets `group-title`: `source` (default, e.g. "Antenna"), `rf` ("545 MHz"), `quality`
+(HD / SD) or `none`.
 
 ### Programme guide (`/epg`)
 

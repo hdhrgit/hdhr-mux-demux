@@ -33,6 +33,7 @@ func (d *Device) routes() http.Handler {
 	mux.HandleFunc("POST /lineup.post", d.handleLineupPost)
 	mux.HandleFunc("GET /lineup.post", d.handleLineupPost)
 	d.dmsRoutes(mux)
+	d.playlistRoutes(mux)
 	mux.HandleFunc("GET /epg", d.handleEPG)
 	mux.HandleFunc("GET /epg.xml", d.handleEPG)
 	mux.HandleFunc("GET /epg.json", d.handleEPGJSON)

@@ -2227,3 +2227,76 @@ func TestWebInterface(t *testing.T) {
 		t.Errorf("plain root: %d", r.StatusCode)
 	}
 }
+
+// The lineup as an M3U playlist for players that cannot use lineup.json.
+func TestPlaylistM3U(t *testing.T) {
+	e := setup(t, []int{2}, 2, nil)
+	e.lu.Replace([]lineup.Entry{
+		{GuideNumber: "7.1", GuideName: "ALPHA", Frequency: 177000000, Program: 1, HD: true, Favorite: true},
+		{GuideNumber: "7.2", GuideName: `BE"TA, the second`, Frequency: 177000000, Program: 2},
+		{GuideNumber: "104.1", GuideName: "NEXT-A", Frequency: 605000000, Program: 1376, Modulation: "atsc3", HD: true},
+		{GuideNumber: "9.1", GuideName: "SCRAMBLED", Frequency: 473000000, Program: 1, DRM: true},
+	})
+	get := func(path string) (string, string) {
+		r, err := http.Get(e.api + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Body.Close()
+		b, _ := io.ReadAll(r.Body)
+		if r.StatusCode != 200 {
+			t.Fatalf("%s: %d", path, r.StatusCode)
+		}
+		return string(b), r.Header.Get("Content-Type")
+	}
+
+	body, ctype := get("/playlist.m3u8")
+	if !strings.HasPrefix(ctype, "audio/x-mpegurl") {
+		t.Errorf("content type %q", ctype)
+	}
+	lines := strings.Split(strings.TrimSpace(body), "\n")
+	if !strings.HasPrefix(lines[0], "#EXTM3U ") || !strings.Contains(lines[0], `url-tvg="`+e.api+`/epg"`) {
+		t.Errorf("header %q", lines[0])
+	}
+	if len(lines) != 1+2*3 { // three channels; the DRM one is left out
+		t.Fatalf("%d lines:\n%s", len(lines), body)
+	}
+	if lines[1] != `#EXTINF:-1 tvg-id="7.1" tvg-chno="7.1" tvg-name="ALPHA" group-title="Antenna",ALPHA` ||
+		lines[2] != e.http+"/auto/v7.1" {
+		t.Errorf("first entry:\n%s\n%s", lines[1], lines[2])
+	}
+	if !strings.Contains(lines[3], `tvg-name="BE'TA, the second"`) || !strings.HasSuffix(lines[3], `,BE"TA, the second`) {
+		t.Errorf("quoting: %s", lines[3])
+	}
+	if strings.Contains(body, "SCRAMBLED") {
+		t.Error("DRM channel listed")
+	}
+	for _, p := range []string{"/lineup.m3u", "/lineup.m3u8", "/playlist.m3u"} {
+		if b, _ := get(p); b != body {
+			t.Errorf("%s differs from /playlist.m3u8", p)
+		}
+	}
+
+	count := func(path string) (int, string) {
+		b, _ := get(path)
+		return strings.Count(b, "#EXTINF"), b
+	}
+	if n, _ := count("/playlist.m3u?hd=1"); n != 2 {
+		t.Errorf("hd=1: %d channels, want 2", n)
+	}
+	if n, b := count("/playlist.m3u?favorites=1"); n != 1 || !strings.Contains(b, "ALPHA") {
+		t.Errorf("favorites=1: %d channels", n)
+	}
+	if n, b := count("/playlist.m3u?atsc3=0"); n != 2 || strings.Contains(b, "NEXT-A") {
+		t.Errorf("atsc3=0: %d channels", n)
+	}
+	if _, b := count("/playlist.m3u?group=rf"); !strings.Contains(b, `group-title="177 MHz"`) {
+		t.Errorf("group=rf: %s", b)
+	}
+	if _, b := count("/playlist.m3u?group=quality"); !strings.Contains(b, `group-title="HD"`) || !strings.Contains(b, `group-title="SD"`) {
+		t.Errorf("group=quality: %s", b)
+	}
+	if _, b := count("/playlist.m3u?group=none"); strings.Contains(b, "group-title") {
+		t.Errorf("group=none: %s", b)
+	}
+}
