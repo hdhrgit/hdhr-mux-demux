@@ -242,7 +242,8 @@ function renderLineup(root) {
   root.innerHTML = `<div class="page-title"><h1>Lineup</h1><p><span id="lineup-count">–</span> channels, with what is on now.</p></div>
     <div class="toolbar"><label class="search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
       <input id="q" type="search" placeholder="Search channels and programmes" aria-label="Search channels and programmes" autocomplete="off"></label>
-      <div class="filters" role="group" aria-label="Filter">${[['all', 'All'], ['hd', 'HD'], ['live', 'Being watched'], ['fav', 'Favourites']].map(([k, n]) => `<button type="button" data-f="${k}" aria-pressed="${lineup.filter === k}">${n}</button>`).join('')}</div></div>
+      <div class="filters" role="group" aria-label="Filter">${[['all', 'All'], ['hd', 'HD'], ['live', 'Being watched'], ['fav', 'Favourites']].map(([k, n]) => `<button type="button" data-f="${k}" aria-pressed="${lineup.filter === k}">${n}</button>`).join('')}</div>
+      <a class="btn" href="/playlist.m3u8" title="For players that cannot use the HDHomeRun protocol; guide link included">M3U8 playlist</a></div>
     <div class="card table-card"><table class="lineup"><thead><tr><th class="c-num">Ch</th><th>Channel</th><th>Now</th><th class="c-next">Next</th><th class="c-rf">RF</th><th class="c-act"></th></tr></thead><tbody id="lineup-body"><tr><td colspan="6"><div class="skeleton" style="margin:12px"></div></td></tr></tbody></table></div>`;
   const q = $('#q'); q.value = lineup.q;
   q.addEventListener('input', () => { lineup.q = q.value; updateLineup(); });

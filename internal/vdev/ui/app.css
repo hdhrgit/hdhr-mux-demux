@@ -237,6 +237,8 @@ table.lineup { width: 100%; border-collapse: collapse; }
 .tag.live { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
 .btn { white-space: nowrap; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; }
 .btn:hover { background: var(--bg-2); }
+.toolbar a.btn { padding: 8px 14px; border-radius: 999px; color: var(--muted); }
+.toolbar a.btn:hover { text-decoration: none; color: var(--text); }
 .btn.ok { color: var(--good); border-color: var(--good); }
 
 .foot { max-width: 1320px; width: 100%; margin: 0 auto; padding: 14px 20px 26px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px 24px; color: var(--faint); font-size: 12.5px; }
