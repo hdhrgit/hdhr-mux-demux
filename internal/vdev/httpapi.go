@@ -340,11 +340,7 @@ func (d *Device) handleTunersHTML(w http.ResponseWriter, r *http.Request) {
 				}
 				kind := ""
 				if vw.Control {
-					kind = " (control"
-					if vw.Inferred {
-						kind += ", channel guessed from its PIDs"
-					}
-					kind += ")"
+					kind = " (control)"
 				}
 				fmt.Fprintf(w, "%s%s &mdash; %s%s &mdash; %s &mdash; %.1f Mbps &mdash; buffer %d%%, dropped %d<br>",
 					html.EscapeString(label), html.EscapeString(name), html.EscapeString(vw.Client), kind,

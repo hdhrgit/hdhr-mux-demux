@@ -134,7 +134,7 @@ function viewerHTML(v, nowSec) {
   const raw = !v.scan && (!/^\d/.test(v.channel) || /^ch/.test(v.channel));
   const queue = pct(v.queue);
   return `<div class="viewer">
-    <div class="v-top"><span class="chan ${raw ? 'raw' : ''}">${esc(v.channel)}</span><span class="v-name">${esc(v.name || (v.scan ? '' : 'Unlisted channel'))}</span>${v.scan ? '<span class="tag" title="This client picks PIDs that complete no programme: it is collecting tables (the guide), not watching a channel.">scan</span>' : ''}${v.inferred ? `<span class="tag" title="${v.alt && v.alt.length > 1 ? 'These channels carry the same audio and video, so there is no telling which one is being watched. ' : ''}This client picks PIDs instead of a channel: the channel is a guess from them.">guess</span>` : ''}
+    <div class="v-top"><span class="chan ${raw ? 'raw' : ''}">${esc(v.channel)}</span><span class="v-name">${esc(v.name || (v.scan ? '' : 'Unlisted channel'))}</span>
       <span class="v-client mono">${esc(v.client || 'unknown')}${v.control ? ' · control' : ''}</span></div>
     ${v.scan ? '' : programme(v.now, nowSec)}
     ${v.next ? `<div class="times"><span>Next</span><span>${v.next.placeholder ? 'to be announced' : esc(v.next.title)} · ${clock(v.next.start)}</span></div>` : ''}
