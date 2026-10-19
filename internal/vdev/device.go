@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"hdhrmux/internal/chanmap"
+	"hdhrmux/internal/config"
 	"hdhrmux/internal/hdhrproto"
 	"hdhrmux/internal/hub"
 	"hdhrmux/internal/lineup"
@@ -91,6 +92,13 @@ type Config struct {
 	ScanPollInterval time.Duration
 	// NoATSC3SSDP leaves the ATSC 3.0 primary device out of the announcements.
 	NoATSC3SSDP bool
+	// Settings, if set, backs the web interface's settings page. Restart is
+	// what its restart button calls; SettingsLocked refuses all changes.
+	Settings       *config.Manager
+	Restart        func()
+	SettingsLocked bool
+	// StateDir is where the multiplexer keeps its state (shown on the settings page).
+	StateDir string
 	// Hidden stops the multiplexer advertising itself: wildcard UDP discovery
 	// requests are not answered and SSDP is not started. Requests naming its
 	// device ID, and direct connections, still work.

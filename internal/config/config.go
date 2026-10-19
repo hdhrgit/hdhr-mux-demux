@@ -2,14 +2,24 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"hdhrmux/internal/hdhrproto"
 )
+
+// Loopback reports whether the multiplexer is bound to the loopback address only.
+func (c *Config) Loopback() bool {
+	ip := net.ParseIP(c.Bind)
+	return ip != nil && ip.IsLoopback()
+}
 
 // Duration is a time.Duration that unmarshals from strings like "30s".
 type Duration time.Duration
@@ -36,6 +46,12 @@ type Config struct {
 	// physical tuner, numbered 0..N-1 across all devices in a stable order.
 	VirtualTuners int `json:"virtual_tuners"`
 
+	// Bind restricts every listener whose address has no host (the default
+	// ":80", ":5004", ":65001") to this address. "127.0.0.1" serves only this
+	// machine, for a DVR running next to the multiplexer: SSDP is then off, and
+	// the DVR finds the multiplexer by address, not by broadcast.
+	Bind string `json:"bind"`
+
 	HTTPListen    string `json:"http_listen"`    // web/API, default ":80"
 	StreamListen  string `json:"stream_listen"`  // streams, default ":5004" ("-" disables)
 	ControlListen string `json:"control_listen"` // default ":65001"
@@ -51,11 +67,15 @@ type Config struct {
 	// Discoverable (default true) lets clients find the multiplexer: it answers
 	// wildcard UDP discovery and announces itself over SSDP. When false it is
 	// only found by those who know its address or device ID.
-	Discoverable *bool  `json:"discoverable"`
-	LogRequests  bool   `json:"log_requests"` // log every client request (diagnostics)
-	PprofListen  string `json:"pprof_listen"` // e.g. "127.0.0.1:6060": Go profiling endpoint (off by default)
+	Discoverable *bool `json:"discoverable"`
+	// SettingsLocked refuses every change from the web interface's settings page.
+	SettingsLocked bool   `json:"settings_locked"`
+	LogRequests    bool   `json:"log_requests"` // log every client request (diagnostics)
+	PprofListen    string `json:"pprof_listen"` // e.g. "127.0.0.1:6060": Go profiling endpoint (off by default)
 
 	StateDir string `json:"state_dir"` // lineup.json and device id live here
+	// Path is the config file this was loaded from (not part of the file).
+	Path string `json:"-"`
 
 	Upstream Upstream `json:"upstream"`
 	Lineup   Lineup   `json:"lineup"`
@@ -166,19 +186,53 @@ func applyEnv(c *Config) {
 	}
 }
 
-func Load(path string) (*Config, error) {
+// Load reads the config file (if any), lays the settings saved from the web
+// interface over it, then the environment, and fills in defaults.
+func Load(path string) (*Config, error) { return loadConfig(path, nil, true) }
+
+// LoadWithoutSettings is Load without settings.json: the way out when a saved
+// setting stops the multiplexer from starting.
+func LoadWithoutSettings(path string) (*Config, error) { return loadConfig(path, []byte("{}"), true) }
+
+// loadConfig builds the configuration. overlay, if not nil, replaces settings.json.
+func loadConfig(path string, overlay []byte, env bool) (*Config, error) {
 	c := &Config{}
+	base := map[string]any{}
 	if path != "" {
 		b, err := os.ReadFile(path)
 		if err != nil {
 			return nil, err
 		}
-		dec := json.NewDecoder(strings.NewReader(string(b)))
+		if err := json.Unmarshal(b, &base); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+	}
+	if overlay == nil {
+		stateDir, _ := base["state_dir"].(string)
+		if stateDir == "" {
+			stateDir = "."
+		}
+		var err error
+		if overlay, err = os.ReadFile(filepath.Join(stateDir, settingsFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+	}
+	if len(bytes.TrimSpace(overlay)) > 0 {
+		ov := map[string]any{}
+		if err := json.Unmarshal(overlay, &ov); err != nil {
+			return nil, fmt.Errorf("settings.json: %w", err)
+		}
+		deepMerge(base, ov)
+	}
+	if len(base) > 0 {
+		b, _ := json.Marshal(base)
+		dec := json.NewDecoder(bytes.NewReader(b))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(c); err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
 	}
+	c.Path = path
 	if c.StateDir == "" {
 		c.StateDir = "."
 	}
@@ -235,7 +289,9 @@ func Load(path string) (*Config, error) {
 		n = min(*c.StreamTTL, 8)
 	}
 	c.StreamTTL = &n
-	applyEnv(c)
+	if env {
+		applyEnv(c)
+	}
 	if c.StreamListen == "" {
 		c.StreamListen = ":5004"
 	}
@@ -245,6 +301,16 @@ func Load(path string) (*Config, error) {
 	case "device", "own":
 	default:
 		return nil, fmt.Errorf("lineup.scan_mode %q: want device or own", c.Lineup.ScanMode)
+	}
+	if c.Bind != "" {
+		if net.ParseIP(c.Bind) == nil {
+			return nil, fmt.Errorf("bind %q is not an IP address", c.Bind)
+		}
+		for _, a := range []*string{&c.HTTPListen, &c.StreamListen, &c.ControlListen} {
+			if strings.HasPrefix(*a, ":") {
+				*a = net.JoinHostPort(c.Bind, (*a)[1:])
+			}
+		}
 	}
 	if c.Linger == 0 {
 		c.Linger = Duration(5 * time.Second)

@@ -62,6 +62,7 @@ func (d *Device) uiRoutes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("GET /ui/api/activity", d.handleUIActivity)
 	mux.HandleFunc("GET /ui/api/lineup", d.handleUILineup)
+	d.settingsRoutes(mux)
 }
 
 // ---- activity -------------------------------------------------------------

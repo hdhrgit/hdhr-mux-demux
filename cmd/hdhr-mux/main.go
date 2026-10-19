@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -28,13 +29,26 @@ import (
 	"hdhrmux/internal/vdev"
 )
 
-func main() {
+// exitRestart is the exit status after "Restart" on the settings page: not 0, so
+// that supervisors that only restart on failure (Docker on-failure, systemd
+// Restart=on-failure) bring the multiplexer back too.
+const exitRestart = 3
+
+func main() { os.Exit(run()) }
+
+func run() int {
 	cfgPath := flag.String("config", "", "path to JSON config file (defaults are used if omitted)")
 	scan := flag.Bool("scan", false, "scan for channels at startup even if a lineup exists")
+	ignoreSettings := flag.Bool("ignore-settings", false, "ignore settings.json (saved from the web interface) in the state directory: the way out if a saved setting stops start-up")
 	flag.Parse()
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 
-	cfg, err := config.Load(*cfgPath)
+	load := config.Load
+	if *ignoreSettings {
+		load = config.LoadWithoutSettings
+		log.Printf("ignoring settings.json")
+	}
+	cfg, err := load(*cfgPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -66,6 +80,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	var restart atomic.Bool
 
 	tuners := cfg.VirtualTuners
 	for i := 0; i < 5; i++ {
@@ -135,13 +150,17 @@ func main() {
 		ControlAddr:            cfg.ControlListen,
 		StreamAddr:             cfg.StreamListen,
 		AdvertiseHost:          cfg.AdvertiseHost,
-		SSDP:                   *cfg.SSDP,
+		SSDP:                   *cfg.SSDP && !cfg.Loopback(), // multicast does not reach anybody over loopback
 		NoSSDP4:                !*cfg.SSDPIPv4,
 		NoSSDP6:                !*cfg.SSDPIPv6,
 		NoATSC3SSDP:            !*cfg.SSDPATSC3,
 		Hidden:                 !*cfg.Discoverable,
 		LogRequests:            cfg.LogRequests,
 		IdleRelease:            time.Duration(cfg.IdleRelease),
+		StateDir:               cfg.StateDir,
+		Settings:               config.NewManager(*cfgPath, cfg),
+		SettingsLocked:         cfg.SettingsLocked,
+		Restart:                func() { restart.Store(true); stop() },
 	}, h, lu)
 	if err != nil {
 		log.Fatal(err)
@@ -166,6 +185,10 @@ func main() {
 	}
 	<-ctx.Done()
 	log.Printf("shutting down")
+	if restart.Load() {
+		return exitRestart
+	}
+	return 0
 }
 
 // deviceID returns the configured device ID, or a persisted random one.
