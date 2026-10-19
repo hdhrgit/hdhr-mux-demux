@@ -2592,6 +2592,28 @@ func TestAutoJoinsADirectClient(t *testing.T) {
 			set("/tuner0/target", "udp://"+rx.LocalAddr().String())
 			waitFor(t, "tvheadend's stream", 4*time.Second, func() bool { return udp.Load() > 188*50 })
 
+			controlSince := func() int64 {
+				var a struct {
+					Tuners []struct {
+						Viewers []struct {
+							Control bool
+							Since   int64
+						}
+					}
+				}
+				getJSON(t, e.api+"/ui/api/activity", &a)
+				for _, tn := range a.Tuners {
+					for _, v := range tn.Viewers {
+						if v.Control {
+							return v.Since
+						}
+					}
+				}
+				return 0
+			}
+			since0 := controlSince()
+			time.Sleep(1200 * time.Millisecond)
+
 			c, rc := e.open("/auto/v7.2")
 			if c == nil {
 				t.Fatal("/auto/ refused")
@@ -2612,6 +2634,9 @@ func TestAutoJoinsADirectClient(t *testing.T) {
 				return
 			}
 
+			if s := controlSince(); since0 == 0 || s != since0 {
+				t.Fatalf("tvheadend's time watched changed when the viewer joined: %d -> %d", since0, s)
+			}
 			// tvheadend goes on receiving, and changing its filter leaves the viewer alone
 			before := udp.Load()
 			set("/tuner0/filter", "0x0000 0x0100-0x0102 0x0110-0x0112")

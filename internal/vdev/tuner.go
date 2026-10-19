@@ -58,6 +58,9 @@ type VTuner struct {
 	lockkey   uint32
 	lockIP    string
 	lastUse   time.Time
+	// ctlSince is when the control client began receiving (its sender started); lastUse
+	// moves with every command and every joining viewer, so it cannot say that.
+	ctlSince time.Time
 
 	physStatus string // cached status of the physical counterpart
 	physOK     bool
@@ -194,7 +197,7 @@ func (v *VTuner) maybeStartSender() error {
 	if err != nil {
 		return err
 	}
-	v.snd = snd
+	v.snd, v.ctlSince = snd, time.Now()
 	return nil
 }
 
@@ -324,7 +327,10 @@ func (v *VTuner) viewerRows() []ViewerRow {
 	}
 	sub, tgt, vch, spec := v.sub, v.targetStr, v.vchannel, v.spec
 	controlled := v.snd != nil
-	since := v.lastUse
+	since := v.ctlSince
+	if since.IsZero() {
+		since = v.lastUse
+	}
 	v.mu.Unlock()
 
 	var rows []ViewerRow

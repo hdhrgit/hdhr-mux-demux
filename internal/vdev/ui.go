@@ -100,10 +100,10 @@ type uiViewer struct {
 	Control bool         `json:"control,omitempty"` // a control-protocol client rather than HTTP
 	// Inferred: a guess from the PIDs the client asked for; Alt are all the
 	// channels it may be watching when they cannot be told apart.
-	Inferred bool     `json:"inferred,omitempty"`
+	Inferred bool `json:"inferred,omitempty"`
 	// Scan: collecting tables (an EPG or channel scan), not watching a channel.
-	Scan bool `json:"scan,omitempty"`
-	Alt      []string `json:"alt,omitempty"`
+	Scan bool     `json:"scan,omitempty"`
+	Alt  []string `json:"alt,omitempty"`
 }
 
 type uiTuner struct {
