@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"hdhrmux/internal/hdhrproto"
@@ -25,11 +26,15 @@ const settingsFile = "settings.json"
 
 // Field describes one setting for the web interface.
 type Field struct {
-	Key         string   `json:"key"` // dotted path in the JSON, e.g. "guide.refresh"
-	Group       string   `json:"group"`
-	Label       string   `json:"label"`
-	Help        string   `json:"help"`
-	Type        string   `json:"type"` // bool, int, text, duration, list, choice
+	Key   string `json:"key"` // dotted path in the JSON, e.g. "guide.refresh"
+	Group string `json:"group"`
+	Label string `json:"label"`
+	Help  string `json:"help"`
+	Type  string `json:"type"` // bool, int, text, duration, list, choice
+	// ZeroOff: for a duration, 0 is a real value that switches the thing off, not "unset".
+	ZeroOff bool `json:"zeroOff,omitempty"`
+	// Restart: the setting is read once, at start; a change applies after a restart.
+	Restart     bool     `json:"restart,omitempty"`
 	Choices     []string `json:"choices,omitempty"`
 	Placeholder string   `json:"placeholder,omitempty"`
 	Env         string   `json:"env,omitempty"` // an environment variable that overrides it
@@ -60,24 +65,24 @@ var schema = []Field{
 	{Key: "upstream.mode", Group: "Devices", Label: "Transport", Type: "choice", Choices: []string{"http", "rtp", "udp"}, Help: "http works through Docker and NAT. rtp and udp need the devices to reach this machine."},
 	{Key: "upstream.stream_port", Group: "Devices", Label: "Device streaming port", Type: "int", Placeholder: "5004", Help: "Port the devices stream on."},
 
-	{Key: "linger", Group: "Streaming", Label: "Keep an unused tuner tuned", Type: "duration", Placeholder: "5s", Help: "So flipping back to a channel is instant. A tuner is given up at once when anybody needs it. -1s turns it off."},
+	{Key: "linger", Group: "Streaming", Label: "Keep an unused tuner tuned", Type: "duration", ZeroOff: true, Placeholder: "5s", Help: "So flipping back to a channel is instant. A tuner is given up at once when anybody needs it. 0 turns it off."},
 	{Key: "client_buffer_mb", Group: "Streaming", Label: "Buffer per client (MB)", Type: "int", Placeholder: "16", Help: "How much a slow client may fall behind before data is dropped for it."},
-	{Key: "idle_release", Group: "Streaming", Label: "Release forgotten tuners after", Type: "duration", Help: "Free a tuner left tuned without a viewer after this long. Empty means never."},
+	{Key: "idle_release", Group: "Streaming", Label: "Release forgotten tuners after", Type: "duration", ZeroOff: true, Placeholder: "0 (never)", Help: "Free a tuner left tuned without a viewer after this long. 0 means never."},
 	{Key: "auto_join_direct", Group: "Streaming", Label: "/auto/ joins direct clients", Type: "bool", Help: "An /auto/ request (Channels DVR, the playlist) for a channel that tvheadend or a request for a tuner by number already receives uses that tuner instead of taking another. Direct clients never join anybody."},
 	{Key: "auto_join_other_locations", Group: "Streaming", Label: "/auto/ rides other locations", Type: "bool", Help: "The same station can be received on a second RF channel the lineup does not list. An /auto/ request rides an open session that carries it there instead of taking a tuner."},
 	{Key: "evict_scans", Group: "Streaming", Label: "Guide scans give way to viewers", Type: "bool", Help: "When every tuner is busy, an /auto/ request takes one from a client that is only collecting tables (tvheadend's idle guide scan). Clients watching a programme are never touched."},
 	{Key: "stream_ttl", Group: "Network", Label: "Stream TTL (hops)", Type: "int", Placeholder: "3", Help: "IP time-to-live of the video sent to clients, 3 like the devices, so it cannot be taken beyond a couple of routers. At most 8; larger values are cut to 8. Use a VPN for remote viewing."},
 
 	{Key: "lineup.channel_map", Group: "Lineup", Label: "Channel map", Type: "choice", Choices: []string{"us-bcast", "us-cable", "us-hrc", "us-irc", "kr-bcast", "kr-cable", "eu-bcast", "eu-cable", "au-bcast", "au-cable", "tw-bcast", "tw-cable"}, Help: "Used for scans and for tuning by channel number."},
-	{Key: "lineup.refresh", Group: "Lineup", Label: "Re-read device lineups every", Type: "duration", Placeholder: "10m", Help: "The channel list comes from the devices; -1s never refreshes."},
+	{Key: "lineup.refresh", Group: "Lineup", Label: "Re-read device lineups every", Type: "duration", ZeroOff: true, Placeholder: "10m", Help: "The channel list comes from the devices. 0 never refreshes (a rescan still does)."},
 	{Key: "lineup.scan_mode", Group: "Lineup", Label: "Rescan with", Type: "choice", Choices: []string{"device", "own"}, Help: "device hands a rescan (Channels DVR asks daily) to one idle device's own scan; own runs the multiplexer's scan on every free tuner."},
 	{Key: "lineup.scan_on_start", Group: "Lineup", Label: "Scan at start-up", Type: "bool", Help: "Run a channel scan when the multiplexer starts (off by default: the devices' own lineups are used)."},
 
-	{Key: "guide.refresh", Group: "Guide", Label: "Collect the guide every", Type: "duration", Placeholder: "3h", Help: "How often idle multiplexes are listened to for programme data. -1s never."},
+	{Key: "guide.refresh", Group: "Guide", Label: "Collect the guide every", Type: "duration", ZeroOff: true, Placeholder: "1h", Help: "How often idle multiplexes are listened to for programme data. 0 never (guides still come from running streams)."},
 	{Key: "guide.hold", Group: "Guide", Label: "Time on each multiplex", Type: "duration", Placeholder: "45s", Help: "How long each multiplex is listened to during a guide pass."},
 	{Key: "guide.parallel", Group: "Guide", Label: "Multiplexes at once", Type: "int", Placeholder: "3", Help: "How many multiplexes a guide pass listens to at the same time."},
-	{Key: "guide.start_delay", Group: "Guide", Label: "Wait after start-up", Type: "duration", Placeholder: "90s", Help: "Delay before the first guide pass."},
-	{Key: "guide.unlocked", Group: "Guide", Label: "Leave tuners unlocked", Type: "bool", Help: "Let other applications take a tuner a guide pass is using."},
+	{Key: "guide.start_delay", Group: "Guide", Label: "Wait after start-up", Type: "duration", ZeroOff: true, Placeholder: "90s", Help: "Delay before the first guide pass. 0 starts it at once."},
+	{Key: "guide.unlocked", Group: "Guide", Label: "Leave tuners unlocked", Type: "bool", Help: "Let other applications (tvheadend, another DVR) take a tuner a guide pass is using. On by default; the pass notices and carries on elsewhere."},
 
 	{Key: "log_requests", Group: "Diagnostics", Label: "Log every request", Type: "bool", Help: "Write every client request to the log. Noisy; for finding out what a client does."},
 	{Key: "pprof_listen", Group: "Diagnostics", Label: "Profiling address", Type: "text", Placeholder: "off", Help: "For example 127.0.0.1:6060. Go profiling endpoint; leave empty unless you are debugging."},
@@ -154,12 +159,35 @@ func deepMerge(dst, src map[string]any) {
 
 // Manager reads and writes the web-editable settings of a running instance.
 type Manager struct {
-	path string // the config file ("" if none)
-	cfg  *Config
+	path string  // the config file ("" if none)
+	cfg  *Config // as started: what the settings that need a restart are running with
+
+	mu     sync.Mutex
+	fresh  *Config // the latest configuration read from disk
+	loader func() (*Config, error)
 }
 
 // NewManager returns a manager for cfg, which was loaded from path.
-func NewManager(path string, cfg *Config) *Manager { return &Manager{path: path, cfg: cfg} }
+func NewManager(path string, cfg *Config) *Manager { return &Manager{path: path, cfg: cfg, fresh: cfg} }
+
+// SetLoader says how to read the configuration again, the way it was read at start.
+func (m *Manager) SetLoader(f func() (*Config, error)) { m.loader = f }
+
+// Reload reads the configuration again (after a save) and returns it. The settings
+// that do not need a restart are meant to be applied from it.
+func (m *Manager) Reload() (*Config, error) {
+	if m.loader == nil {
+		return nil, errors.New("this setup cannot reload its configuration")
+	}
+	c, err := m.loader()
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	m.fresh = c
+	m.mu.Unlock()
+	return c, nil
+}
 
 // ConfigPath is the config file the multiplexer was started with.
 func (m *Manager) ConfigPath() string { return m.path }
@@ -167,15 +195,36 @@ func (m *Manager) ConfigPath() string { return m.path }
 // FilePath is where the web-edited settings are stored.
 func (m *Manager) FilePath() string { return filepath.Join(m.cfg.StateDir, settingsFile) }
 
-// Values returns the settings in effect, by key.
-func (m *Manager) Values() map[string]any {
-	b, _ := json.Marshal(m.cfg)
+// settingValues maps a configuration to the schema's keys.
+func settingValues(c *Config) map[string]any {
+	b, _ := json.Marshal(c)
 	var all map[string]any
 	json.Unmarshal(b, &all)
 	out := map[string]any{}
 	for _, f := range schema {
 		if v, ok := getPath(all, f.Key); ok {
-			if f.Type == "duration" && v == "0s" {
+			out[f.Key] = v
+		}
+	}
+	return out
+}
+
+// Values returns the settings in effect, by key: what is running for the ones that
+// need a restart to change, and the latest saved value for the others (they are
+// applied as soon as they are saved).
+func (m *Manager) Values() map[string]any {
+	m.mu.Lock()
+	fresh := m.fresh
+	m.mu.Unlock()
+	running, latest := settingValues(m.cfg), settingValues(fresh)
+	out := map[string]any{}
+	for _, f := range schema {
+		src := latest
+		if f.Restart {
+			src = running
+		}
+		if v, ok := src[f.Key]; ok {
+			if f.Type == "duration" && v == "0s" && !f.ZeroOff {
 				v = "" // not set: the built-in default applies (shown as the placeholder)
 			}
 			out[f.Key] = v
@@ -258,7 +307,7 @@ func normalize(f Field, v any) (any, error) {
 		}
 		s = strings.TrimSpace(s)
 		if _, err := time.ParseDuration(s); err != nil {
-			return nil, errors.New("must be a duration like 30s, 5m or 3h (-1s switches it off)")
+			return nil, errors.New("must be a duration like 30s, 5m or 3h (0 where it can be switched off)")
 		}
 		return s, nil
 	case "choice":
@@ -385,4 +434,43 @@ func (m *Manager) Save(changes map[string]any) error {
 		return fmt.Errorf("cannot write %s: %w", dst, err)
 	}
 	return nil
+}
+
+// PendingRestart lists the settings that were saved but need a restart to take
+// effect: their saved value differs from what is running.
+func (m *Manager) PendingRestart() []string {
+	m.mu.Lock()
+	fresh := m.fresh
+	m.mu.Unlock()
+	running, latest := settingValues(m.cfg), settingValues(fresh)
+	keys := []string{}
+	for _, f := range schema {
+		if f.Restart && !sameJSON(running[f.Key], latest[f.Key]) {
+			keys = append(keys, f.Key)
+		}
+	}
+	return keys
+}
+
+func sameJSON(a, b any) bool {
+	x, _ := json.Marshal(a)
+	y, _ := json.Marshal(b)
+	return string(x) == string(y)
+}
+
+// restartKeys are the settings that are read once, at start. Everything else in
+// the schema is applied as soon as it is saved.
+var restartKeys = map[string]bool{
+	"friendly_name": true, "device_id": true, "virtual_tuners": true, "discoverable": true,
+	"bind": true, "http_listen": true, "stream_listen": true, "control_listen": true, "advertise_host": true,
+	"ssdp": true, "ssdp_ipv4": true, "ssdp_ipv6": true, "ssdp_atsc3": true,
+	"upstream.discover": true, "upstream.devices": true, "upstream.allow": true, "upstream.tuners": true,
+	"upstream.exclude": true, "upstream.mask": true, "upstream.mode": true, "upstream.stream_port": true,
+	"lineup.channel_map": true, "lineup.scan_on_start": true, "guide.start_delay": true, "pprof_listen": true,
+}
+
+func init() {
+	for i := range schema {
+		schema[i].Restart = restartKeys[schema[i].Key]
+	}
 }

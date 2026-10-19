@@ -490,7 +490,7 @@ func (d *Device) openAuto(ctx context.Context, rq streamReq, start func(*VTuner)
 
 	// 1b. The station may be received elsewhere than the lineup says (another
 	// antenna or feed): a session that already carries it is as good.
-	if d.cfg.AutoJoinOtherLocations && rq.vchannel != "" && !rq.service {
+	if d.lv().AutoJoinOtherLocations && rq.vchannel != "" && !rq.service {
 		for _, c := range d.hub.CarryingChannel(rq.vchannel) {
 			if c.Spec.Frequency == rq.spec.Frequency || c.Tuner >= len(d.tuners) {
 				continue // the lineup's own place was tried above
@@ -553,7 +553,7 @@ func (d *Device) openAuto(ctx context.Context, rq streamReq, start func(*VTuner)
 			return nil, nil, err
 		}
 	}
-	if d.cfg.EvictScans && !errors.Is(lastErr, upstream.ErrNoTuner) {
+	if d.lv().EvictScans && !errors.Is(lastErr, upstream.ErrNoTuner) {
 		if v, sub, err := d.evictScanAndStart(rq, start); err == nil {
 			return v, sub, nil
 		}
@@ -672,7 +672,7 @@ func (d *Device) handleStream(w http.ResponseWriter, r *http.Request) {
 	// uses it to poll that tuner's /tunerN/debug for its signal display.
 	h["X-HDHomeRun-Resource"] = []string{fmt.Sprintf("tuner%d", v.idx)}
 	if c, _ := r.Context().Value(connKey{}).(net.Conn); c != nil {
-		setTTL(c, d.cfg.StreamTTL)
+		setTTL(c, d.lv().StreamTTL)
 	}
 	w.WriteHeader(http.StatusOK)
 	countStreamResponse(http.StatusOK, "")

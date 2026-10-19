@@ -31,7 +31,7 @@
   },
 
   "guide": {
-    "refresh": "3h",
+    "refresh": "1h",
     "hold": "45s",
     "parallel": 3
   },
