@@ -83,6 +83,10 @@ type Config struct {
 	Guide Guide `json:"guide"`
 
 	Linger Duration `json:"linger"` // keep an unused physical tuner tuned this long (default 5s, 0 disables)
+	// SignalSettle (default 2s, 0 = off): for this long after a stream starts, a symbol quality of
+	// 0 (how a tuner starts before its figures climb) is not shown to clients. Channels DVR
+	// counts each such second as a signal error.
+	SignalSettle Duration `json:"signal_settle"`
 	// AutoJoinDirect (default true): an /auto/ request for a channel a direct client
 	// (tvheadend over the control protocol, or a request for a tuner by number) is
 	// already receiving joins that tuner instead of taking another. Never the other
@@ -322,6 +326,7 @@ func loadConfig(path string, overlay []byte, env bool) (*Config, error) {
 		}
 	}
 	setDur(&c.Linger, "linger", 5*time.Second)
+	setDur(&c.SignalSettle, "signal_settle", 2*time.Second)
 	setDur(&c.Guide.Refresh, "guide.refresh", time.Hour)
 	setDur(&c.Guide.StartDelay, "guide.start_delay", 90*time.Second)
 	setDur(&c.Lineup.Refresh, "lineup.refresh", 10*time.Minute)

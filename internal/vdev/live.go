@@ -82,5 +82,6 @@ func (d *Device) Reconfigure(l Live) {
 func (d *Device) ApplyConfig(c *config.Config) {
 	d.hub.SetLinger(time.Duration(c.Linger))
 	d.hub.SetClientBuffer(c.ClientBufferMB << 20)
+	d.hub.SetSignalSettle(time.Duration(c.SignalSettle))
 	d.Reconfigure(liveFromConfig(c))
 }

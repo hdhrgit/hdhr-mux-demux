@@ -436,7 +436,7 @@ func (v *VTuner) statusString() string {
 		return fmt.Sprintf("ch=%s lock=none ss=0 snq=0 seq=0 bps=0 pps=0", chs)
 	}
 	info := sub.Info()
-	st := info.Status
+	st := info.ClientStatus
 	ch := st.Channel
 	if ch == "" {
 		ch = chs
@@ -466,7 +466,7 @@ func (v *VTuner) debugString() string {
 		return "tun: ch=none lock=none ss=0 snq=0 seq=0 dbg=0\ndev: bps=0 resync=0 overflow=0\nts:  bps=0 te=0 crc=0\nnet: bps=0 pps=0 err=0 stop=0\n"
 	}
 	info := sub.Info()
-	st := info.Status
+	st := info.ClientStatus
 	lock := st.Lock
 	if lock == "" {
 		lock = "none"

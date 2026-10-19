@@ -46,6 +46,9 @@ type Hub struct {
 	// linger and clientBuf can change while running (the settings page).
 	linger    atomic.Int64 // time.Duration
 	clientBuf atomic.Int64
+	settle    atomic.Int64 // time.Duration; see SetSignalSettle
+	seqMu     sync.Mutex
+	lastSEQ   map[string]int // the last non-zero symbol quality seen on each physical tuner
 }
 
 func New(pool *upstream.Pool, cfg Config) *Hub {
@@ -880,4 +883,33 @@ func (h *Hub) SetClientBuffer(n int) {
 		n = 16 << 20
 	}
 	h.clientBuf.Store(int64(n))
+}
+
+// SetSignalSettle sets for how long after a stream gets its tuner a symbol quality
+// of 0 is hidden from clients (0 = never). A tuner's quality figures start at zero
+// and climb over a second or two after it locks; a client such as Channels DVR
+// counts every second of zero as a signal error, though the picture is fine. For
+// that long, a zero is shown as the last good reading of that physical tuner (100
+// if there was none). The activity page and metrics keep the device's own figures.
+func (h *Hub) SetSignalSettle(d time.Duration) { h.settle.Store(int64(d)) }
+
+func (h *Hub) noteSEQ(id string, s upstream.Status) {
+	if s.SEQ <= 0 || !s.Locked() {
+		return
+	}
+	h.seqMu.Lock()
+	if h.lastSEQ == nil {
+		h.lastSEQ = map[string]int{}
+	}
+	h.lastSEQ[id] = s.SEQ
+	h.seqMu.Unlock()
+}
+
+func (h *Hub) lastSEQOf(id string) int {
+	h.seqMu.Lock()
+	defer h.seqMu.Unlock()
+	if v, ok := h.lastSEQ[id]; ok {
+		return v
+	}
+	return 100
 }
