@@ -116,11 +116,7 @@ loop:
 
 func (d *Device) guideLoop() {
 	defer d.wg.Done()
-	delay := d.cfg.GuideStartDelay
-	if delay == 0 {
-		delay = 90 * time.Second
-	}
-	timer := time.NewTimer(delay)
+	timer := time.NewTimer(d.cfg.GuideStartDelay)
 	defer timer.Stop()
 	for {
 		select {

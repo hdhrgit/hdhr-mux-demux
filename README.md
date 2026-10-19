@@ -177,7 +177,7 @@ titles and times, descriptions). The multiplexer reads it from the streams it al
 * **From running streams.** Any stream of a whole multiplex hands over the guide of every
   channel on it every few seconds, so watching one channel updates its neighbours.
 * **From a pass over the idle multiplexes.** After start-up (90 s) and then every
-  `guide.refresh` (default 3 h) it listens to each ATSC 1.0 multiplex in the lineup for
+  `guide.refresh` (default 1 h, 0 turns it off) it listens to each ATSC 1.0 multiplex in the lineup for
   `guide.hold` (45 s), `guide.parallel` (3) at a time, on spare tuners. A pass never keeps a
   tuner from a viewer: it gives it up at once. `POST /epg/refresh` starts one now.
 
@@ -194,7 +194,7 @@ term is refreshed by the passes and by any running stream, the far end only chan
 
 **Unlocked passes.** While a pass listens, the device holds the tuner locked for the HTTP
 stream, so another application asking for that tuner is told it is in use. With
-`guide.unlocked: true` the pass drops that lock as soon as the stream runs (`lockkey force`, the
+`guide.unlocked` (on by default) the pass drops that lock as soon as the stream runs (`lockkey force`, the
 stream keeps flowing). Anyone may then take the tuner (checked on real devices: their request
 succeeds and our stream stops), the pass notices within a second, lets go without touching what
 the new user set up, and carries on with the next multiplex when a tuner is free. It still pulls
@@ -325,7 +325,7 @@ See [config.example.json](config.example.json). Notable keys:
   known to work: IPv4 and the media server only.
 * `upstream.mode` – `http` (default) or `rtp`/`udp` (device pushes to this
   host; needs inbound UDP).
-* `linger` (5 s, `-1s` to disable), `client_buffer_mb` (16), `idle_release`.
+* `linger` (5 s, `0` to disable), `client_buffer_mb` (16), `idle_release`.
 * `auto_join_direct` (true): an `/auto/` request joins a tuner a direct client (tvheadend, `/tunerN/`) already holds on the same channel.
 * `auto_join_other_locations` (true): the same station can be received on more than one RF channel (a second antenna or feed, a translator) while a device's lineup lists only one of them. An `/auto/` request for a channel that a session already open carries on another RF channel (found from that multiplex's own channel table) rides that session instead of taking a tuner. Never opens a tuner somewhere other than the lineup's place; set to `false` to always use the lineup's.
 * `evict_scans` (true): when every tuner is busy, an `/auto/` request takes one from a control client that is only collecting tables (tvheadend's idle guide scan): its PID filter has completed no programme for 10 s. The scanner finds its data stopped and its lock gone. A client that is watching a programme, or has a viewer on its tuner, is never touched. Set to `false` to leave direct clients' tuners alone even then.

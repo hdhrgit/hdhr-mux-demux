@@ -82,7 +82,7 @@ type Config struct {
 
 	Guide Guide `json:"guide"`
 
-	Linger Duration `json:"linger"` // keep an unused physical tuner tuned this long (default 5s, -1s disables)
+	Linger Duration `json:"linger"` // keep an unused physical tuner tuned this long (default 5s, 0 disables)
 	// AutoJoinDirect (default true): an /auto/ request for a channel a direct client
 	// (tvheadend over the control protocol, or a request for a tuner by number) is
 	// already receiving joins that tuner instead of taking another. Never the other
@@ -106,11 +106,11 @@ type Config struct {
 
 // Guide controls the programme guide collected from the broadcasts.
 type Guide struct {
-	Refresh    Duration `json:"refresh"`     // how often idle multiplexes are listened to (default 3h, -1s = never)
+	Refresh    Duration `json:"refresh"`     // how often idle multiplexes are listened to (default 1h, 0 = never)
 	Hold       Duration `json:"hold"`        // time spent on each multiplex (default 45s)
 	Parallel   int      `json:"parallel"`    // multiplexes listened to at once (default 3)
-	StartDelay Duration `json:"start_delay"` // wait after start-up (default 90s)
-	// Unlocked drops the tuner's lock while listening so others can take it over.
+	StartDelay Duration `json:"start_delay"` // wait after start-up (default 90s, 0 = at once)
+	// Unlocked drops the tuner's lock while listening so others can take it over (default true).
 	Unlocked bool `json:"unlocked"`
 }
 
@@ -139,7 +139,7 @@ type Lineup struct {
 	ScanFrom      int               `json:"scan_from"`
 	ScanTo        int               `json:"scan_to"`
 	ScanOnStart   bool              `json:"scan_on_start"` // scan at start-up (off by default: the devices' lineups are used)
-	Refresh       Duration          `json:"refresh"`       // re-read the devices' lineups this often (default 10m, -1s = never)
+	Refresh       Duration          `json:"refresh"`       // re-read the devices lineups this often (default 10m, 0 = never)
 	// ScanMode: "device" (default) hands a rescan to one idle device's own firmware
 	// scan, preferring one with ATSC 3.0 tuners; "own" runs the multiplexer's own scan
 	// on every free tuner of every device.
@@ -312,8 +312,21 @@ func loadConfig(path string, overlay []byte, env bool) (*Config, error) {
 			}
 		}
 	}
-	if c.Linger == 0 {
-		c.Linger = Duration(5 * time.Second)
+	// A duration that is absent gets its default; 0 switches the thing off (a negative
+	// value, the old way to say so, still does).
+	setDur := func(d *Duration, key string, def time.Duration) {
+		if !has(base, key) {
+			*d = Duration(def)
+		} else if *d < 0 {
+			*d = 0
+		}
+	}
+	setDur(&c.Linger, "linger", 5*time.Second)
+	setDur(&c.Guide.Refresh, "guide.refresh", time.Hour)
+	setDur(&c.Guide.StartDelay, "guide.start_delay", 90*time.Second)
+	setDur(&c.Lineup.Refresh, "lineup.refresh", 10*time.Minute)
+	if !has(base, "guide.unlocked") { // other applications may take a tuner a guide pass is using
+		c.Guide.Unlocked = true
 	}
 	if c.ClientBufferMB == 0 {
 		c.ClientBufferMB = 16
@@ -322,4 +335,19 @@ func loadConfig(path string, overlay []byte, env bool) (*Config, error) {
 		c.Upstream.WaitFree = Duration(3 * time.Second)
 	}
 	return c, nil
+}
+
+// has reports whether the dotted key is present in the (merged) configuration.
+func has(m map[string]any, key string) bool {
+	var cur any = m
+	for _, p := range strings.Split(key, ".") {
+		mm, ok := cur.(map[string]any)
+		if !ok {
+			return false
+		}
+		if cur, ok = mm[p]; !ok {
+			return false
+		}
+	}
+	return true
 }

@@ -111,27 +111,10 @@ func run() int {
 	if err != nil {
 		log.Fatal(err)
 	}
-	linger := time.Duration(cfg.Linger)
-	if linger < 0 {
-		linger = 0
-	}
-	h := hub.New(pool, hub.Config{Linger: linger, ClientBuffer: cfg.ClientBufferMB << 20, Mask: *cfg.Upstream.Mask})
+	h := hub.New(pool, hub.Config{Linger: time.Duration(cfg.Linger), ClientBuffer: cfg.ClientBufferMB << 20, Mask: *cfg.Upstream.Mask})
 	defer h.Close()
 
-	guideRefresh := time.Duration(cfg.Guide.Refresh)
-	if guideRefresh == 0 {
-		guideRefresh = 3 * time.Hour
-	}
-	if guideRefresh < 0 {
-		guideRefresh = 0
-	}
-	refresh := time.Duration(cfg.Lineup.Refresh)
-	if refresh == 0 {
-		refresh = 10 * time.Minute
-	}
-	if refresh < 0 {
-		refresh = 0
-	}
+	guideRefresh, refresh := time.Duration(cfg.Guide.Refresh), time.Duration(cfg.Lineup.Refresh)
 	dev, err := vdev.New(vdev.Config{
 		DeviceID:               id,
 		FriendlyName:           cfg.FriendlyName,

@@ -45,7 +45,8 @@ type Config struct {
 	// refreshed with spare tuners (0 = never; guides still come from running
 	// streams). GuideHold is how long each multiplex is listened to (default
 	// 45 s), GuideParallel how many are listened to at once (default 3) and
-	// GuideStartDelay the wait after start-up before the first pass (90 s).
+	// GuideStartDelay the wait after start-up before the first pass (the
+	// configuration supplies the defaults).
 	GuideRefresh    time.Duration
 	GuideHold       time.Duration
 	GuideParallel   int

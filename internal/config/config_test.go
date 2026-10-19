@@ -93,7 +93,7 @@ func TestSettingsOverlayAndSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := NewManager(cfgPath, c)
-	if v := m.Values(); v["friendly_name"] != "From File" || v["guide.refresh"] != "6h0m0s" || v["upstream.mask"] != true || v["idle_release"] != "" {
+	if v := m.Values(); v["friendly_name"] != "From File" || v["guide.refresh"] != "6h0m0s" || v["upstream.mask"] != true || v["idle_release"] != "0s" {
 		t.Fatalf("values %v", v)
 	}
 
@@ -229,5 +229,27 @@ func TestSettingsCoverClientSharing(t *testing.T) {
 	c2, _ := Load(cfgPath)
 	if *c2.AutoJoinDirect || *c2.EvictScans || !*c2.AutoJoinOtherLocations || *c2.StreamTTL != 8 || c2.Lineup.ScanMode != "own" {
 		t.Fatalf("saved values not applied: %v %v %v %v %s", *c2.AutoJoinDirect, *c2.EvictScans, *c2.AutoJoinOtherLocations, *c2.StreamTTL, c2.Lineup.ScanMode)
+	}
+}
+
+// An absent duration gets its default; 0 switches the thing off, and so does a
+// negative value (the old way to say it).
+func TestZeroSwitchesThingsOff(t *testing.T) {
+	c := load(t, "")
+	if time.Duration(c.Linger) != 5*time.Second || time.Duration(c.Guide.Refresh) != time.Hour ||
+		time.Duration(c.Lineup.Refresh) != 10*time.Minute || time.Duration(c.Guide.StartDelay) != 90*time.Second || !c.Guide.Unlocked {
+		t.Fatalf("defaults: linger %v guide %v lineup %v delay %v unlocked %v", c.Linger, c.Guide.Refresh, c.Lineup.Refresh, c.Guide.StartDelay, c.Guide.Unlocked)
+	}
+	for _, js := range []string{
+		`{"linger":"0","guide":{"refresh":"0","start_delay":"0"},"lineup":{"refresh":"0"}}`,
+		`{"linger":"-1s","guide":{"refresh":"-1s","start_delay":"-5s"},"lineup":{"refresh":"-1s"}}`,
+	} {
+		c := load(t, js)
+		if c.Linger != 0 || c.Guide.Refresh != 0 || c.Guide.StartDelay != 0 || c.Lineup.Refresh != 0 {
+			t.Errorf("%s: linger %v guide %v delay %v lineup %v, want all off", js, c.Linger, c.Guide.Refresh, c.Guide.StartDelay, c.Lineup.Refresh)
+		}
+	}
+	if c := load(t, `{"guide":{"unlocked":false}}`); c.Guide.Unlocked {
+		t.Error("an explicit guide.unlocked=false was overridden")
 	}
 }
