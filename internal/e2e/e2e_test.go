@@ -2127,12 +2127,13 @@ func TestWebInterface(t *testing.T) {
 		Device  struct{ ID, Name string }
 		Summary struct{ Viewers, TunersInUse, Tuners, Physical int }
 		Tuners  []struct {
-			Index    int
-			State    string
-			Physical string
-			RxBps    int
-			Signal   *struct{ Strength, Quality int }
-			Viewers  []struct {
+			Index       int
+			State       string
+			Physical    string
+			RxBps       int
+			Signal      *struct{ Strength, Quality int }
+			PhysicalURL string
+			Viewers     []struct {
 				Client, Channel, Name string
 				Now, Next             *struct{ Title string }
 				Since                 int64
@@ -2154,6 +2155,9 @@ func TestWebInterface(t *testing.T) {
 	if t0.State != "watching" || v.Client != "127.0.0.1" || v.Channel != "7.1" || v.Name != "ALPHA" ||
 		v.Now.Title != "Now Show ALPHA" || v.Next == nil || v.Next.Title != "Next Show ALPHA" || v.Since == 0 {
 		t.Errorf("tuner 0: %+v", t0)
+	}
+	if !strings.HasSuffix(t0.PhysicalURL, "/tuners.html?page=tuner0") {
+		t.Errorf("physical tuner link %q (physical %q)", t0.PhysicalURL, t0.Physical)
 	}
 	if t0.Signal == nil || t0.Signal.Strength == 0 {
 		t.Errorf("no signal reported: %+v", t0.Signal)

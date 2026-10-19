@@ -248,10 +248,14 @@ are embedded in the binary.
   (from the guide), how long they have been watching, their bitrate, how full their buffer is
   and any dropped data. Tuners used by other applications are marked, free tuners listed, and
   background work (guide collection, tuners held for a quick return) shown separately.
+  Each physical tuner id links to that device's own status page for the tuner
+  (`http://DEVICE/tuners.html?page=tunerN`). Slots a station has only broadcast as "To Be
+  Announced" are shown as such (they are real PSIP data, but not titles; DVR software with
+  another guide source may know better).
 * **Lineup** – every channel with what is on now and next, search, filters (HD, being watched,
   favourites), and a button that copies the channel's stream URL.
 * **Appearance** (the half-moon button) – System / Light / Dark, and a choice of theme for each:
-  Paper, Mist, Mint (light) and Slate, Midnight, Dusk, Ember (dark). None of them is pure white
+  Paper, Mist, Mint, Lilac (light) and Slate, Midnight, Dusk, Ember (dark). None of them is pure white
   or pure black. *System* follows the device and switches between your light and dark theme by
   itself; the choice is kept in the browser. `?theme=midnight` on the URL forces a theme.
 

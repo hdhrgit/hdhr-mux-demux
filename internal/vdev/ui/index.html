@@ -9,7 +9,7 @@
 <script>
 // Pick the theme before the first paint so there is no flash of the wrong one.
 (function () {
-  var LIGHT = ['paper', 'mist', 'mint'], DARK = ['slate', 'midnight', 'dusk', 'ember'];
+  var LIGHT = ['paper', 'mist', 'mint', 'lilac'], DARK = ['slate', 'midnight', 'dusk', 'ember'];
   var s = {};
   try { s = JSON.parse(localStorage.getItem('hdhrmux.theme') || '{}'); } catch (e) {}
   var mode = s.mode || 'system', light = s.light || 'paper', dark = s.dark || 'slate';
