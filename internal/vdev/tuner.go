@@ -326,19 +326,27 @@ func (v *VTuner) viewerRows() []ViewerRow {
 		if i := strings.Index(tgt, "://"); i >= 0 {
 			host, _, _ = net.SplitHostPort(tgt[i+3:])
 		}
-		label := vch
-		if label == "" {
-			label = spec.String()
-			if num, _, ok := v.inferredChannel(sub, spec); ok {
-				label = num
-			}
-		}
 		bps, _ := sub.Rate()
 		q := 0
 		if c := cap(sub.C); c > 0 {
 			q = sub.Buffered() * 100 / c
 		}
-		rows = append(rows, ViewerRow{Client: host, Label: label, Since: since, BPS: bps, Queue: q, Drops: sub.Drops(), Control: true})
+		labels := []string{vch}
+		if vch == "" {
+			// A client that selects PIDs rather than a channel (tvheadend): the
+			// channels are the programmes its filter includes completely.
+			labels = v.inferredChannels(sub, spec)
+			if len(labels) == 0 {
+				labels = []string{spec.String()}
+			}
+		}
+		for i, label := range labels {
+			row := ViewerRow{Client: host, Label: label, Since: since, Queue: q, Drops: sub.Drops(), Control: true}
+			if i == 0 {
+				row.BPS = bps // one stream: counted once
+			}
+			rows = append(rows, row)
+		}
 	}
 	return rows
 }
@@ -706,17 +714,33 @@ func (v *VTuner) channelmapNow() string {
 	return v.channelmap
 }
 
-// inferredChannel names the channel a client that selects PIDs rather than a
-// channel (tvheadend) is watching: whichever program those PIDs belong to.
+// inferredChannels names the channels a client that selects PIDs rather than a
+// channel (tvheadend) is watching: the programmes its filter includes completely
+// (guide numbers, in programme order).
+func (v *VTuner) inferredChannels(sub *hub.Sub, spec chanmap.Spec) []string {
+	if sub == nil {
+		return nil
+	}
+	var out []string
+	for _, p := range sub.WatchedPrograms() {
+		if num, _, ok := v.d.lineup.ProgramName(spec.Frequency, p); ok {
+			out = append(out, num)
+		}
+	}
+	return out
+}
+
+// inferredChannel is the first of them, with its name.
 func (v *VTuner) inferredChannel(sub *hub.Sub, spec chanmap.Spec) (num, name string, ok bool) {
 	if sub == nil {
 		return "", "", false
 	}
-	progs := sub.WatchedPrograms()
-	if len(progs) == 0 {
-		return "", "", false
+	for _, p := range sub.WatchedPrograms() {
+		if num, name, ok := v.d.lineup.ProgramName(spec.Frequency, p); ok {
+			return num, name, true
+		}
 	}
-	return v.d.lineup.ProgramName(spec.Frequency, progs[0])
+	return "", "", false
 }
 
 // firstViewerLocked is the address of the oldest HTTP viewer (the one that holds

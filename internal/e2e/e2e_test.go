@@ -2519,7 +2519,8 @@ func TestActivityNamesTheChannelAPIDClientWatches(t *testing.T) {
 	}
 	set("/tuner0/channel", "auto:177000000")
 	// the PAT, the PMTs it wants to look at, and the video and audio of the second programme (7.2)
-	set("/tuner0/filter", "0x0000 0x0100 0x0110 0x0111-0x0112")
+	// and the video of the first (which is not complete: its audio is missing)
+	set("/tuner0/filter", "0x0000 0x0100 0x0110 0x0101 0x0111-0x0112")
 	set("/tuner0/target", "udp://"+rx.LocalAddr().String())
 
 	var a struct {
@@ -2536,6 +2537,13 @@ func TestActivityNamesTheChannelAPIDClientWatches(t *testing.T) {
 	if v := a.Tuners[0].Viewers[0]; v.Name != "BETA" {
 		t.Errorf("viewer %+v", v)
 	}
+	// every channel that is completely included is listed, one row each
+	set("/tuner0/filter", "0x0000 0x0101-0x0102 0x0111-0x0112")
+	waitFor(t, "both programmes named", 6*time.Second, func() bool {
+		a.Tuners = nil
+		getJSON(t, e.api+"/ui/api/activity", &a)
+		return len(a.Tuners[0].Viewers) == 2 && a.Tuners[0].Viewers[0].Channel == "7.1" && a.Tuners[0].Viewers[1].Channel == "7.2"
+	})
 	// discovery-only filters (PMTs but no elementary streams) name nothing
 	set("/tuner0/filter", "0x0000 0x0100 0x0110")
 	waitFor(t, "no programme claimed", 6*time.Second, func() bool {
