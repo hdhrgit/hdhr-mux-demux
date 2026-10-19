@@ -101,6 +101,8 @@ type uiViewer struct {
 	// Inferred: a guess from the PIDs the client asked for; Alt are all the
 	// channels it may be watching when they cannot be told apart.
 	Inferred bool     `json:"inferred,omitempty"`
+	// Scan: collecting tables (an EPG or channel scan), not watching a channel.
+	Scan bool `json:"scan,omitempty"`
 	Alt      []string `json:"alt,omitempty"`
 }
 
@@ -267,6 +269,12 @@ func (d *Device) activity() uiActivity {
 						}
 					}
 					uv.Name = strings.Join(names, " / ")
+				}
+			}
+			if r.Scan {
+				uv.Scan, uv.Channel, uv.Name = true, "EPG scan", ""
+				if r.Freq != 0 {
+					uv.Name = fmt.Sprintf("%d MHz", r.Freq/1000000)
 				}
 			}
 			uv.Now, uv.Next = d.nowNext(gn, now)

@@ -131,12 +131,12 @@ function programme(p, nowSec) {
     <div class="times"><span>${clock(p.start)}</span><span>${Math.max(0, Math.round((p.end - nowSec) / 60))} min left · ends ${clock(p.end)}</span></div></div>`;
 }
 function viewerHTML(v, nowSec) {
-  const raw = !/^\d/.test(v.channel) || /^ch/.test(v.channel);
+  const raw = !v.scan && (!/^\d/.test(v.channel) || /^ch/.test(v.channel));
   const queue = pct(v.queue);
   return `<div class="viewer">
-    <div class="v-top"><span class="chan ${raw ? 'raw' : ''}">${esc(v.channel)}</span><span class="v-name">${esc(v.name || 'Unlisted channel')}</span>${v.inferred ? `<span class="tag" title="${v.alt && v.alt.length > 1 ? 'These channels carry the same audio and video, so there is no telling which one is being watched. ' : ''}This client picks PIDs instead of a channel: the channel is a guess from them.">guess</span>` : ''}
+    <div class="v-top"><span class="chan ${raw ? 'raw' : ''}">${esc(v.channel)}</span><span class="v-name">${esc(v.name || (v.scan ? '' : 'Unlisted channel'))}</span>${v.scan ? '<span class="tag" title="This client picks PIDs that complete no programme: it is collecting tables (the guide), not watching a channel.">scan</span>' : ''}${v.inferred ? `<span class="tag" title="${v.alt && v.alt.length > 1 ? 'These channels carry the same audio and video, so there is no telling which one is being watched. ' : ''}This client picks PIDs instead of a channel: the channel is a guess from them.">guess</span>` : ''}
       <span class="v-client mono">${esc(v.client || 'unknown')}${v.control ? ' · control' : ''}</span></div>
-    ${programme(v.now, nowSec)}
+    ${v.scan ? '' : programme(v.now, nowSec)}
     ${v.next ? `<div class="times"><span>Next</span><span>${v.next.placeholder ? 'to be announced' : esc(v.next.title)} · ${clock(v.next.start)}</span></div>` : ''}
     <div class="v-meta"><span>watching <b>${dur(nowSec - v.since)}</b></span><span><b>${(v.bps / 1e6).toFixed(1)}</b> Mbps</span>
       <span class="buf">buffer <span class="meter ${queue > 60 ? 'bad' : queue > 25 ? 'warn' : ''}"><i style="width:${queue}%"></i></span> ${queue}%</span>

@@ -2544,11 +2544,12 @@ func TestActivityNamesTheChannelAPIDClientWatches(t *testing.T) {
 		getJSON(t, e.api+"/ui/api/activity", &a)
 		return len(a.Tuners[0].Viewers) == 2 && a.Tuners[0].Viewers[0].Channel == "7.1" && a.Tuners[0].Viewers[1].Channel == "7.2"
 	})
-	// discovery-only filters (PMTs but no elementary streams) name nothing
+	// discovery-only filters (PMTs but no elementary streams) complete no programme:
+	// the client is collecting tables, which is a scan, not a channel
 	set("/tuner0/filter", "0x0000 0x0100 0x0110")
-	waitFor(t, "no programme claimed", 6*time.Second, func() bool {
+	waitFor(t, "a scan, not a channel", 6*time.Second, func() bool {
 		a.Tuners = nil
 		getJSON(t, e.api+"/ui/api/activity", &a)
-		return len(a.Tuners[0].Viewers) == 1 && strings.HasPrefix(a.Tuners[0].Viewers[0].Channel, "auto")
+		return len(a.Tuners[0].Viewers) == 1 && a.Tuners[0].Viewers[0].Channel == "EPG scan" && a.Tuners[0].Viewers[0].Name == "177 MHz"
 	})
 }

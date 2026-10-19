@@ -299,6 +299,11 @@ type ViewerRow struct {
 	// Inferred: the channel is a guess from the PIDs the client asked for.
 	Alt      []string
 	Inferred bool
+	// Scan: the client picks PIDs that complete no programme, so it is collecting
+	// tables (a guide or channel scan), not watching anything; Freq is the RF
+	// channel it is on.
+	Scan bool
+	Freq uint64
 }
 
 // viewerRows lists the clients currently attached to the tuner.
@@ -348,7 +353,8 @@ func (v *VTuner) viewerRows() []ViewerRow {
 			if label == "" {
 				label = spec.String()
 			}
-			rows = append(rows, ViewerRow{Client: host, Label: label, Since: since, BPS: bps, Queue: q, Drops: sub.Drops(), Control: true})
+			scan := vch == "" && sub.SelectsPIDs()
+			rows = append(rows, ViewerRow{Client: host, Label: label, Since: since, BPS: bps, Queue: q, Drops: sub.Drops(), Control: true, Scan: scan, Freq: spec.Frequency})
 		}
 		for i, g := range groups {
 			row := ViewerRow{Client: host, Label: g[0], Alt: g, Inferred: true, Since: since, Queue: q, Drops: sub.Drops(), Control: true}

@@ -444,6 +444,14 @@ func (s *Sub) WatchedPrograms() []uint16 {
 	return out
 }
 
+// SelectsPIDs reports whether the client picks PIDs itself (as opposed to
+// receiving everything or one programme).
+func (s *Sub) SelectsPIDs() bool {
+	s.st.fmu.Lock()
+	defer s.st.fmu.Unlock()
+	return s.mode == modePIDs
+}
+
 // WatchedProgramGroups is WatchedPrograms with the programmes that cannot be told
 // apart put together: some stations carry the same audio and video under two
 // programme numbers (9.1 and 54.2 on KQED), and a client that picks PIDs may be

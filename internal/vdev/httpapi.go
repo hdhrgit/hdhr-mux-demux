@@ -335,6 +335,9 @@ func (d *Device) handleTunersHTML(w http.ResponseWriter, r *http.Request) {
 				if len(vw.Alt) > 1 { // a guess that cannot tell these apart
 					label = strings.Join(vw.Alt, " / ")
 				}
+				if vw.Scan {
+					label = "EPG scan (" + label + ")"
+				}
 				kind := ""
 				if vw.Control {
 					kind = " (control"
