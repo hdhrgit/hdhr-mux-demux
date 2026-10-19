@@ -32,12 +32,26 @@ import (
 // version is set at build time: -ldflags "-X main.version=0.99.0".
 var version = "dev"
 
-// exitRestart is the exit status after "Restart" on the settings page: not 0, so
+// exitRestart is the status run returns after "Restart" on the settings page. main starts the
+// program again in place; if that is impossible it is also the exit status: not 0, so
 // that supervisors that only restart on failure (Docker on-failure, systemd
 // Restart=on-failure) bring the multiplexer back too.
 const exitRestart = 3
 
-func main() { os.Exit(run()) }
+func main() {
+	code := run()
+	if code == exitRestart {
+		// "Restart" on the settings page: start again in place, so that it works
+		// without a supervisor (a container run without --restart). Everything has
+		// been stopped and flushed by now. If that fails, exiting with a status that
+		// is not 0 lets a supervisor do it.
+		log.Printf("restarting in place")
+		if err := execSelf(); err != nil {
+			log.Printf("cannot restart in place (%v): exiting with status %d for a supervisor to restart", err, exitRestart)
+		}
+	}
+	os.Exit(code)
+}
 
 func run() int {
 	cfgPath := flag.String("config", "", "path to JSON config file (defaults are used if omitted)")
@@ -115,6 +129,8 @@ func run() int {
 	defer h.Close()
 
 	guideRefresh, refresh := time.Duration(cfg.Guide.Refresh), time.Duration(cfg.Lineup.Refresh)
+	settings := config.NewManager(*cfgPath, cfg)
+	settings.SetLoader(func() (*config.Config, error) { return load(*cfgPath) })
 	dev, err := vdev.New(vdev.Config{
 		DeviceID:               id,
 		FriendlyName:           cfg.FriendlyName,
@@ -150,7 +166,7 @@ func run() int {
 		LogRequests:            cfg.LogRequests,
 		IdleRelease:            time.Duration(cfg.IdleRelease),
 		StateDir:               cfg.StateDir,
-		Settings:               config.NewManager(*cfgPath, cfg),
+		Settings:               settings,
 		SettingsLocked:         cfg.SettingsLocked,
 		Restart:                func() { restart.Store(true); stop() },
 		Version:                version,

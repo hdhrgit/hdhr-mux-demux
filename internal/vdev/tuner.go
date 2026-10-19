@@ -256,7 +256,7 @@ func (v *VTuner) joinHTTP(ctx context.Context, spec chanmap.Spec, program uint16
 	// A tuner somebody asked for directly (tvheadend over the control protocol, or
 	// by number) can be joined too when AutoJoinDirect is on: a viewer does not
 	// retune the tuner, so its owner's lock does not matter.
-	shareable := v.autoOwned && !v.lockedLocked() || v.d.cfg.AutoJoinDirect
+	shareable := v.autoOwned && !v.lockedLocked() || v.d.lv().AutoJoinDirect
 	ok := v.tuned && v.sub != nil && shareable && v.sub.Key() == v.d.hub.KeyFor(spec, o)
 	v.mu.Unlock()
 	v.op.Unlock()
@@ -993,7 +993,7 @@ func newSender(v *VTuner, sub *hub.Sub, tgt string) (*sender, error) {
 	if err != nil {
 		return nil, err
 	}
-	setTTL(conn, v.d.cfg.StreamTTL)
+	setTTL(conn, v.d.lv().StreamTTL)
 	s := &sender{v: v, conn: conn, rtp: t.rtp, quit: make(chan struct{}), done: make(chan struct{})}
 	sub.Enable()
 	go s.run(sub)

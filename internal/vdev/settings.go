@@ -2,6 +2,7 @@ package vdev
 
 import (
 	"encoding/json"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -63,15 +64,16 @@ func (d *Device) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 	m := d.cfg.Settings
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, map[string]any{
-		"schema":       config.Schema(),
-		"values":       m.Values(),
-		"saved":        m.Saved(),
-		"env":          m.OverriddenByEnv(),
-		"storage":      config.StorageOf(d.cfg.StateDir),
-		"configPath":   m.ConfigPath(),
-		"settingsPath": m.FilePath(),
-		"locked":       d.cfg.SettingsLocked,
-		"restartable":  d.cfg.Restart != nil,
+		"schema":         config.Schema(),
+		"values":         m.Values(),
+		"saved":          m.Saved(),
+		"env":            m.OverriddenByEnv(),
+		"storage":        config.StorageOf(d.cfg.StateDir),
+		"configPath":     m.ConfigPath(),
+		"settingsPath":   m.FilePath(),
+		"locked":         d.cfg.SettingsLocked,
+		"restartable":    d.cfg.Restart != nil,
+		"pendingRestart": m.PendingRestart(),
 	})
 }
 
@@ -90,7 +92,15 @@ func (d *Device) handleSettingsPut(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-	writeJSON(w, map[string]any{"ok": true, "restartNeeded": len(body.Changes) > 0})
+	// Apply what can be applied now; the rest waits for a restart.
+	c, err := d.cfg.Settings.Reload()
+	if err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, map[string]any{"error": "saved, but reading it back failed: " + err.Error()})
+		return
+	}
+	d.ApplyConfig(c)
+	log.Printf("settings: saved %d change(s) from %s", len(body.Changes), r.RemoteAddr)
+	writeJSON(w, map[string]any{"ok": true, "pendingRestart": d.cfg.Settings.PendingRestart(), "values": d.cfg.Settings.Values(), "saved": d.cfg.Settings.Saved()})
 }
 
 func (d *Device) handleRestart(w http.ResponseWriter, r *http.Request) {

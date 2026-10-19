@@ -43,6 +43,9 @@ type Hub struct {
 	learner  func([]lineup.Entry)     // told what streams and probes reveal about channels
 	learning map[string]chan struct{} // virtual channels being probed right now
 	service  map[uint64]bool          // RF channels known to be ATSC 3.0 (one device-selected service per tuner)
+	// linger and clientBuf can change while running (the settings page).
+	linger    atomic.Int64 // time.Duration
+	clientBuf atomic.Int64
 }
 
 func New(pool *upstream.Pool, cfg Config) *Hub {
@@ -50,6 +53,8 @@ func New(pool *upstream.Pool, cfg Config) *Hub {
 		cfg.ClientBuffer = 16 << 20
 	}
 	h := &Hub{cfg: cfg, pool: pool, streams: map[string]*stream{}, service: map[uint64]bool{}, learning: map[string]chan struct{}{}}
+	h.linger.Store(int64(cfg.Linger))
+	h.clientBuf.Store(int64(cfg.ClientBuffer))
 	pool.Reclaim = h.reclaim
 	return h
 }
@@ -212,7 +217,7 @@ func (h *Hub) subscribe(ctx context.Context, spec chanmap.Spec, o Options) (*Sub
 	if st.err != nil {
 		return nil, st.err
 	}
-	s := &Sub{st: st, C: make(chan []byte, h.cfg.ClientBuffer/(7*ts.PacketSize)), done: make(chan struct{}), mode: modeAll, started: time.Now()}
+	s := &Sub{st: st, C: make(chan []byte, int(h.clientBuf.Load())/(7*ts.PacketSize)), done: make(chan struct{}), mode: modeAll, started: time.Now()}
 	s.pids = ts.FullSet()
 	st.addSub(s)
 	return s, nil
@@ -236,13 +241,13 @@ func (h *Hub) unref(st *stream) {
 		h.mu.Unlock()
 		st.shutdown()
 	}
-	if h.cfg.Linger <= 0 {
+	if h.linger.Load() <= 0 {
 		h.mu.Unlock()
 		go finish()
 		return
 	}
 	st.idleSince = time.Now()
-	st.idleTimer = time.AfterFunc(h.cfg.Linger, finish)
+	st.idleTimer = time.AfterFunc(time.Duration(h.linger.Load()), finish)
 	h.mu.Unlock()
 }
 
@@ -862,4 +867,17 @@ func (s *Sub) FilterAge() time.Duration {
 		return 0
 	}
 	return time.Since(s.filterAt)
+}
+
+// SetLinger changes how long an unused tuner stays tuned (0 = release at once).
+// It applies to streams that lose their last viewer from now on.
+func (h *Hub) SetLinger(d time.Duration) { h.linger.Store(int64(d)) }
+
+// SetClientBuffer changes the per-client queue for slow consumers, in bytes. It
+// applies to clients that attach from now on.
+func (h *Hub) SetClientBuffer(n int) {
+	if n <= 0 {
+		n = 16 << 20
+	}
+	h.clientBuf.Store(int64(n))
 }

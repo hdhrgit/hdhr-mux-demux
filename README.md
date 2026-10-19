@@ -252,8 +252,8 @@ docker run -d --name hdhr-mux --network host --restart unless-stopped \
 tuners and the settings saved from the web interface live in `state_dir` (`/var/lib/hdhr-mux` in the
 image). Inside a container that directory disappears with the container unless you map a
 directory or a named volume to it (`-v` above). The web interface's Settings page checks and warns
-when it is not mapped (or is only an anonymous volume). `--restart unless-stopped` lets the
-Settings page's Restart button work, and brings the multiplexer back after a reboot.
+when it is not mapped (or is only an anonymous volume). `--restart unless-stopped` brings the multiplexer back after a reboot or a crash
+(the Settings page's Restart button does not need it).
 
 **On the same machine as the DVR.** The multiplexer can run on bare metal next to Channels DVR
 (or Plex, Jellyfin, ...). Two ways, depending on whether the DVR should find it by itself:
@@ -338,9 +338,14 @@ listen addresses, SSDP, which devices and tuners to use, streaming and guide tim
 Changes are saved to `settings.json` in the state directory, in the same shape as the config file, and
 laid over it: **config file < `settings.json` < environment variables** (a setting an environment
 variable controls is shown as such and cannot be edited on the page). The config file itself is never
-written, so it may be read-only or managed by something else. Settings take effect after a restart
-(the page has a Restart button: the multiplexer exits with status 3 and relies on Docker or systemd to
-start it again).
+written, so it may be read-only or managed by something else. **Apply** saves the changes and puts
+into effect everything that can change while running (sharing options, the guide and lineup timing,
+linger, the client buffer, request logging, the TTL, the rescan mode); the button is inactive until
+something has changed. A few settings are read once, at start (name, device ID, listen addresses,
+SSDP, which devices and tuners to use): they are marked "restart" on the page, and after applying
+them the page says they are waiting. **Restart** is a separate button: the multiplexer stops cleanly
+and starts itself again in the same process, so it works in a container started without
+`--restart` and under any supervisor (if that is not possible it exits with status 3 instead).
 
 The page also shows where the state directory is and warns when it will not survive (see Docker above).
 

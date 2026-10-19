@@ -172,6 +172,7 @@ func (c *Config) defaults() {
 
 type Device struct {
 	cfg    Config
+	live   liveState
 	hub    *hub.Hub
 	lineup *lineup.Lineup
 
@@ -210,6 +211,7 @@ func New(cfg Config, h *hub.Hub, lu *lineup.Lineup) (*Device, error) {
 		return nil, err
 	}
 	d := &Device{cfg: cfg, hub: h, lineup: lu, quit: make(chan struct{}), source: cfg.DefaultSource}
+	d.live.init(liveOf(&cfg))
 	resetStreamCounts() // the counters are process-wide; a new device starts them afresh
 	h.SetLearner(d.learn)
 	for i := 0; i < cfg.Tuners; i++ {
@@ -240,10 +242,12 @@ func (d *Device) Start() error {
 		return err
 	}
 	h := d.routes()
-	if d.cfg.LogRequests {
+	{
 		inner := h
 		h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			log.Printf("req: http %s %s %s (ua=%q)", r.RemoteAddr, r.Method, r.URL.RequestURI(), r.UserAgent())
+			if d.lv().LogRequests {
+				log.Printf("req: http %s %s %s (ua=%q)", r.RemoteAddr, r.Method, r.URL.RequestURI(), r.UserAgent())
+			}
 			inner.ServeHTTP(w, r)
 		})
 	}
@@ -259,14 +263,9 @@ func (d *Device) Start() error {
 	go func() { defer d.wg.Done(); hdhrproto.ServeUDP(d.udpConn, d) }()
 	d.wg.Add(1)
 	go d.reaper()
-	if d.cfg.LineupRefresh > 0 {
-		d.wg.Add(1)
-		go d.lineupLoop()
-	}
-	if d.cfg.GuideRefresh > 0 {
-		d.wg.Add(1)
-		go d.guideLoop()
-	}
+	d.wg.Add(2)
+	go d.lineupLoop()
+	go d.guideLoop()
 	if d.cfg.SSDP && !d.cfg.Hidden {
 		d.ssdp = newSSDP(d)
 		if err := d.ssdp.start(); err != nil {
@@ -349,7 +348,7 @@ func (d *Device) reaper() {
 			return
 		case <-t.C:
 			for _, v := range d.tuners {
-				v.reap(d.cfg.IdleRelease)
+				v.reap(d.lv().IdleRelease)
 			}
 		}
 	}
@@ -380,7 +379,7 @@ func localFor(remote net.IP) string {
 // ---- hdhrproto.Handler -------------------------------------------------
 
 func (d *Device) Discover(remote net.IP, devType, devID uint32) *hdhrproto.Packet {
-	if d.cfg.LogRequests {
+	if d.lv().LogRequests {
 		log.Printf("req: discover from %v type=%08X id=%08X", remote, devType, devID)
 	}
 	if devType != hdhrproto.DeviceTypeWildcard && devType != hdhrproto.DeviceTypeTuner {
@@ -405,7 +404,7 @@ func (d *Device) Discover(remote net.IP, devType, devID uint32) *hdhrproto.Packe
 const unknownVar = "ERROR: unknown getset variable"
 
 func (d *Device) GetSet(remote net.IP, name string, value *string, lockkey *uint32) (string, error) {
-	if d.cfg.LogRequests {
+	if d.lv().LogRequests {
 		if value != nil {
 			log.Printf("req: control %v set %s %q", remote, name, *value)
 		} else {
@@ -525,21 +524,41 @@ func (d *Device) RefreshLineup(ctx context.Context) error {
 	return err
 }
 
+// lineupLoop re-reads the devices' lineups every LineupRefresh (the first time at
+// once). It follows the setting while running; 0 means only when asked.
 func (d *Device) lineupLoop() {
 	defer d.wg.Done()
-	t := time.NewTicker(d.cfg.LineupRefresh)
-	defer t.Stop()
-	for first := true; ; first = false {
+	for first := true; ; {
+		changed := d.changed()
+		var fire <-chan time.Time
+		var t *time.Timer
+		if iv := d.lv().LineupRefresh; iv > 0 {
+			wait := iv
+			if first {
+				wait = 0
+			}
+			t = time.NewTimer(wait)
+			fire = t.C
+		}
+		select {
+		case <-d.quit:
+			if t != nil {
+				t.Stop()
+			}
+			return
+		case <-changed:
+			if t != nil {
+				t.Stop()
+			}
+			continue
+		case <-fire:
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		if err := d.RefreshLineup(ctx); err != nil && first {
 			log.Printf("lineup: %v", err)
 		}
 		cancel()
-		select {
-		case <-d.quit:
-			return
-		case <-t.C:
-		}
+		first = false
 	}
 }
 
@@ -548,7 +567,7 @@ func (d *Device) lineupLoop() {
 // StartScan begins a background channel scan for source (default source if
 // empty). It fails if one is already running.
 func (d *Device) StartScan(source string) error {
-	if d.cfg.ScanMode == "device" {
+	if d.lv().ScanMode == "device" {
 		return d.startDeviceScan(source)
 	}
 	if source == "" {
@@ -582,7 +601,7 @@ func (d *Device) StartScan(source string) error {
 	go func() {
 		defer d.wg.Done()
 		log.Printf("scan: starting %s scan of %d channels", source, len(sel))
-		found, err := d.hub.Scan(ctx, hub.ScanConfig{Channels: sel, Source: source, LockWait: d.cfg.ScanLockWait, InfoWait: d.cfg.ScanInfoWait, PerDevice: d.cfg.ScanTuners}, func(p hub.Progress) {
+		found, err := d.hub.Scan(ctx, hub.ScanConfig{Channels: sel, Source: source, LockWait: d.cfg.ScanLockWait, InfoWait: d.cfg.ScanInfoWait, PerDevice: d.lv().ScanTuners}, func(p hub.Progress) {
 			d.scanMu.Lock()
 			d.scanProg = p
 			d.scanMu.Unlock()

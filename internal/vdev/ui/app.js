@@ -282,8 +282,9 @@ function ctl(f, v, locked, env) {
 function fieldHTML(f, st) {
   const v = st.values[f.key], saved = st.saved.includes(f.key), env = st.env[f.key];
   return `<div class="field ${f.type === 'bool' ? 'inline' : ''}" data-field="${esc(f.key)}">
-    <div class="field-text"><label for="f-${esc(f.key.replace(/\W/g, '_'))}">${esc(f.label)}</label>
+    <div class="field-text"><label for="f-${esc(f.key.replace(/\W/g, '_'))}">${esc(f.label)}</label>${f.restart ? ' <span class="tag" title="Read once, at start: a change applies after a restart.">restart</span>' : ''}
       <p>${esc(f.help)}</p>
+      ${(st.pendingRestart || []).includes(f.key) ? '<p class="note pending">Saved, but still running with the old value until the multiplexer restarts.</p>' : ''}
       ${env ? `<p class="note">Set by the environment variable <code>${esc(env)}</code>, which overrides this page.</p>` : ''}
       ${saved && !st.locked ? '<p class="note saved">Saved from this page. <button type="button" class="link" data-reset>Use the default again</button></p>' : ''}</div>
     <div class="field-ctl">${ctl(f, v, st.locked, env)}</div></div>`;
@@ -306,25 +307,31 @@ function renderSettings(root) {
   load();
 }
 
-function drawSettings() {
+function drawSettings(message) {
   const st = settingsState, body = $('#settings-body');
   const fields = Object.fromEntries(st.schema.map((f) => [f.key, f]));
   const sto = st.storage;
   const banner = sto.warning ? `<div class="banner warn" role="alert"><b>${sto.kind === 'container-layer' || sto.kind === 'memory' ? 'Nothing here is kept' : 'Storage is not permanent'}</b><p>${esc(sto.warning)}</p></div>` : '';
   const lock = st.locked ? '<div class="banner"><b>Settings are locked</b><p>settings_locked is set in the config file, so this page only shows the values.</p></div>' : '';
-  body.innerHTML = banner + lock + GROUPS.map((g) => {
+  const waiting = (st.pendingRestart || []).map((k) => (fields[k] || {}).label || k);
+  const pendingBanner = waiting.length ? `<div class="banner warn" role="status"><b>Waiting for a restart</b><p>${esc(waiting.join(', '))} ${waiting.length === 1 ? 'was' : 'were'} saved and will take effect when the multiplexer restarts.${st.restartable ? '' : ' Restart the container or service to apply.'}</p></div>` : '';
+  body.innerHTML = banner + lock + pendingBanner + GROUPS.map((g) => {
     const fs = st.schema.filter((f) => f.group === g);
     return fs.length ? `<section class="card settings-group"><h2>${g}</h2>${fs.map((f) => fieldHTML(f, st)).join('')}</section>` : '';
   }).join('') + `<div class="card info-card"><h2>Where things are</h2><dl>
       <dt>State directory</dt><dd><code>${esc(sto.path)}</code> <span class="tag">${esc({ disk: 'on disk', mounted: 'mapped', 'anonymous-volume': 'anonymous volume', 'container-layer': 'inside the container', memory: 'memory' }[sto.kind] || sto.kind)}</span>${sto.writable ? '' : ' <span class="tag bad">not writable</span>'}</dd>
       <dt>Config file</dt><dd><code>${esc(st.configPath || '(none: defaults and environment)')}</code></dd>
       <dt>Saved from this page</dt><dd><code>${esc(st.settingsPath)}</code></dd></dl></div>
-    <div class="savebar" id="savebar" hidden><span id="save-msg"></span><span class="grow"></span><button type="button" class="btn" id="discard">Discard</button><button type="button" class="btn primary" id="save">Save</button></div>`;
+    <div class="savebar" id="savebar"><span id="save-msg"></span><span class="grow"></span>${st.restartable ? '<button type="button" class="btn" id="restart" title="Restart the multiplexer. Viewers are disconnected for a few seconds.">Restart</button>' : ''}<button type="button" class="btn" id="discard" disabled>Discard</button><button type="button" class="btn primary" id="save" disabled>Apply</button></div>`;
   const pending = {};
+  const bar = $('#savebar');
+  if (message) { $('#save-msg').textContent = message; bar.classList.add('done'); }
   const update = () => {
     const n = Object.keys(pending).length;
-    $('#savebar').hidden = n === 0 && !body.dataset.restart;
-    if (!body.dataset.restart) { $('#save-msg').textContent = n ? n + ' change' + (n === 1 ? '' : 's') + ' not saved yet' : ''; $('#save').hidden = false; $('#discard').hidden = false; }
+    $('#save').disabled = $('#discard').disabled = n === 0 || st.locked;
+    bar.classList.remove('error');
+    if (n) { bar.classList.remove('done'); $('#save-msg').textContent = n + ' change' + (n === 1 ? '' : 's') + ' not applied yet'; }
+    else if (!bar.classList.contains('done')) $('#save-msg').textContent = '';
   };
   body.addEventListener('input', (e) => {
     const el = e.target.closest('[data-key]'); if (!el) return;
@@ -343,18 +350,16 @@ function drawSettings() {
     try {
       const r = await fetch('/ui/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'hdhr-mux-ui' }, body: JSON.stringify({ changes: pending }) });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error || 'saving failed (' + r.status + ')');
-      body.dataset.restart = '1';
-      $('#savebar').hidden = false; $('#savebar').classList.add('done');
-      $('#save-msg').innerHTML = 'Saved. The changes apply when the multiplexer restarts.';
-      $('#save').remove(); $('#discard').remove();
-      $('#savebar').insertAdjacentHTML('beforeend', st.restartable ? '<button type="button" class="btn primary" id="restart">Restart now</button>' : '<span class="muted">Restart the container or service to apply them.</span>');
-    } catch (err) { $('#save').disabled = false; $('#save-msg').textContent = err.message; $('#savebar').classList.add('error'); update(); $('#savebar').hidden = false; }
+      if (!r.ok) throw new Error(j.error || 'applying failed (' + r.status + ')');
+      Object.assign(st, { values: j.values, saved: j.saved, pendingRestart: j.pendingRestart || [] });
+      const later = (j.pendingRestart || []).filter((k) => k in pending).length;
+      drawSettings('Applied.' + (later ? ' ' + later + ' of them take effect after a restart.' : ' No restart needed.'));
+    } catch (err) { $('#save-msg').textContent = err.message; bar.classList.add('error'); $('#save').disabled = false; $('#discard').disabled = false; }
   });
 }
 
 async function restartNow() {
-  if (!confirm('The multiplexer will stop and Docker or systemd must start it again. Viewers are disconnected for a few seconds. Continue?')) return;
+  if (!confirm('The multiplexer will restart itself. Viewers are disconnected for a few seconds. Continue?')) return;
   $('#save-msg').textContent = 'Restarting…';
   $('#restart').disabled = true;
   try { await fetch('/ui/api/restart', { method: 'POST', headers: { 'X-Requested-With': 'hdhr-mux-ui' } }); } catch (e) { /* it may already be gone */ }
@@ -364,7 +369,7 @@ async function restartNow() {
     try { const r = await fetch('/ui/api/activity', { cache: 'no-store' }); if (r.ok) { location.reload(); return; } } catch (e) { /* not back yet */ }
     await new Promise((r) => setTimeout(r, 1500));
   }
-  $('#save-msg').textContent = 'It has not come back. If it runs in Docker, check that it was started with --restart unless-stopped.';
+  $('#save-msg').textContent = 'It has not come back after 90 seconds. Check its log (docker logs, journalctl -u hdhr-mux).';
 }
 
 /* ---------- router ---------- */

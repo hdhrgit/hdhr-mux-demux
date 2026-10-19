@@ -70,11 +70,11 @@ func (d *Device) GuidePass(ctx context.Context) (done, total int, err error) {
 		}
 	}
 	sort.Slice(freqs, func(i, j int) bool { return freqs[i] < freqs[j] })
-	hold := d.cfg.GuideHold
+	hold := d.lv().GuideHold
 	if hold == 0 {
 		hold = 45 * time.Second
 	}
-	par := d.cfg.GuideParallel
+	par := d.lv().GuideParallel
 	if par <= 0 {
 		par = 3
 	}
@@ -86,7 +86,7 @@ func (d *Device) GuidePass(ctx context.Context) (done, total int, err error) {
 		go func() {
 			defer wg.Done()
 			for f := range work {
-				if err := d.hub.CollectGuide(ctx, chanmap.Spec{Modulation: "auto", Frequency: f}, hold, d.cfg.GuideUnlocked); err != nil {
+				if err := d.hub.CollectGuide(ctx, chanmap.Spec{Modulation: "auto", Frequency: f}, hold, d.lv().GuideUnlocked); err != nil {
 					log.Printf("guide: %d Hz: %v", f, err)
 					continue
 				}
@@ -116,14 +116,32 @@ loop:
 
 func (d *Device) guideLoop() {
 	defer d.wg.Done()
-	timer := time.NewTimer(d.cfg.GuideStartDelay)
-	defer timer.Stop()
-	for {
+	for first := true; ; {
+		changed := d.changed()
+		var fire <-chan time.Time
+		var t *time.Timer
+		if iv := d.lv().GuideRefresh; iv > 0 {
+			wait := iv
+			if first {
+				wait = d.cfg.GuideStartDelay
+			}
+			t = time.NewTimer(wait)
+			fire = t.C
+		}
 		select {
 		case <-d.quit:
+			if t != nil {
+				t.Stop()
+			}
 			return
-		case <-timer.C:
+		case <-changed:
+			if t != nil {
+				t.Stop()
+			}
+			continue
+		case <-fire:
 		}
+		first = false
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
 			select {
@@ -134,7 +152,6 @@ func (d *Device) guideLoop() {
 		}()
 		d.GuidePass(ctx)
 		cancel()
-		timer.Reset(d.cfg.GuideRefresh)
 	}
 }
 

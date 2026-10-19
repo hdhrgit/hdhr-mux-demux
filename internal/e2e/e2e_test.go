@@ -2865,7 +2865,7 @@ func TestSettingsAPI(t *testing.T) {
 	restarted := make(chan struct{}, 1)
 	e := setup(t, []int{2}, 2, func(c *vdev.Config) {
 		c.StateDir = state
-		c.Settings = config.NewManager(cfgPath, cfg)
+		c.Settings = mgr(cfgPath, cfg)
 		c.Restart = func() { restarted <- struct{}{} }
 	})
 
@@ -2909,8 +2909,15 @@ func TestSettingsAPI(t *testing.T) {
 		t.Fatal("a refused request wrote settings")
 	}
 	code, m = call("PUT", "/ui/api/settings", put, admin)
-	if code != 200 || m["ok"] != true || m["restartNeeded"] != true {
+	if code != 200 || m["ok"] != true {
 		t.Fatalf("PUT: %d %v", code, m)
+	}
+	// the two that are read at start wait for a restart; the guide setting is live
+	if p := fmt.Sprint(m["pendingRestart"]); p != "[friendly_name upstream.tuners]" {
+		t.Errorf("pending restart %s, want [friendly_name upstream.tuners]", p)
+	}
+	if v := m["values"].(map[string]any); v["friendly_name"] != "From File" || v["guide.parallel"] != float64(4) {
+		t.Errorf("values after saving: friendly_name %v (still running with the old), guide.parallel %v (live)", v["friendly_name"], v["guide.parallel"])
 	}
 	b, _ := os.ReadFile(filepath.Join(state, "settings.json"))
 	if !strings.Contains(string(b), `"friendly_name": "Living Room"`) || !strings.Contains(string(b), `"parallel": 4`) || !strings.Contains(string(b), "10A22E9C/0-1") {
@@ -2953,7 +2960,7 @@ func TestSettingsLockedAndAbsent(t *testing.T) {
 	os.WriteFile(cfgPath, []byte(`{"state_dir":"`+dir+`"}`), 0o644)
 	cfg, _ := config.Load(cfgPath)
 	e := setup(t, []int{1}, 1, func(c *vdev.Config) {
-		c.StateDir, c.Settings, c.SettingsLocked = dir, config.NewManager(cfgPath, cfg), true
+		c.StateDir, c.Settings, c.SettingsLocked = dir, mgr(cfgPath, cfg), true
 	})
 	req, _ := http.NewRequest("PUT", e.api+"/ui/api/settings", strings.NewReader(`{"changes":{"friendly_name":"x"}}`))
 	req.Header.Set("X-Requested-With", "hdhr-mux-ui")
@@ -3019,4 +3026,57 @@ func TestActivityShowsOtherApplications(t *testing.T) {
 			t.Errorf("tuner %d: %+v", i, a.Tuners[i])
 		}
 	}
+}
+
+// mgr is a settings manager that can read its configuration again, as in main.
+func mgr(path string, cfg *config.Config) *config.Manager {
+	m := config.NewManager(path, cfg)
+	m.SetLoader(func() (*config.Config, error) { return config.Load(path) })
+	return m
+}
+
+// A setting that does not need a restart takes effect when it is saved.
+func TestSettingsApplyWithoutRestart(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	state := filepath.Join(dir, "state")
+	os.WriteFile(cfgPath, []byte(`{"state_dir":"`+state+`","auto_join_direct":false}`), 0o644)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := setup(t, []int{3}, 3, func(c *vdev.Config) {
+		c.StateDir, c.Settings, c.AutoJoinDirect = state, mgr(cfgPath, cfg), false
+	})
+	ctl := hdhrproto.NewControl(e.ctl)
+	defer ctl.Close()
+	rx, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rx.Close()
+	for name, val := range map[string]string{"channel": "auto:177000000", "target": "udp://" + rx.LocalAddr().String()} {
+		if _, err := ctl.Set("/tuner0/"+name, val, 0); err != nil {
+			t.Fatalf("set %s: %v", name, err)
+		}
+	}
+	resource := func() string {
+		c, rc := e.open("/auto/v7.1")
+		if c == nil {
+			t.Fatalf("/auto/ refused: %d", rc.StatusCode)
+		}
+		defer c.close()
+		c.read(t, 188*20)
+		return rc.Header.Get("X-HDHomeRun-Resource")
+	}
+	if r := resource(); r == "tuner0" {
+		t.Fatalf("joined a direct client's tuner with auto_join_direct off: %s", r)
+	}
+	req, _ := http.NewRequest("PUT", e.api+"/ui/api/settings", strings.NewReader(`{"changes":{"auto_join_direct":true}}`))
+	req.Header.Set("X-Requested-With", "hdhr-mux-ui")
+	req.Header.Set("Content-Type", "application/json")
+	if r, err := http.DefaultClient.Do(req); err != nil || r.StatusCode != 200 {
+		t.Fatalf("PUT: %v %v", err, r)
+	}
+	waitFor(t, "the tuner of the direct client is shared once the setting is on", 4*time.Second, func() bool { return resource() == "tuner0" })
 }

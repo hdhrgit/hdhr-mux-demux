@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"hdhrmux/internal/hdhrproto"
@@ -31,7 +32,9 @@ type Field struct {
 	Help  string `json:"help"`
 	Type  string `json:"type"` // bool, int, text, duration, list, choice
 	// ZeroOff: for a duration, 0 is a real value that switches the thing off, not "unset".
-	ZeroOff     bool     `json:"zeroOff,omitempty"`
+	ZeroOff bool `json:"zeroOff,omitempty"`
+	// Restart: the setting is read once, at start; a change applies after a restart.
+	Restart     bool     `json:"restart,omitempty"`
 	Choices     []string `json:"choices,omitempty"`
 	Placeholder string   `json:"placeholder,omitempty"`
 	Env         string   `json:"env,omitempty"` // an environment variable that overrides it
@@ -156,12 +159,35 @@ func deepMerge(dst, src map[string]any) {
 
 // Manager reads and writes the web-editable settings of a running instance.
 type Manager struct {
-	path string // the config file ("" if none)
-	cfg  *Config
+	path string  // the config file ("" if none)
+	cfg  *Config // as started: what the settings that need a restart are running with
+
+	mu     sync.Mutex
+	fresh  *Config // the latest configuration read from disk
+	loader func() (*Config, error)
 }
 
 // NewManager returns a manager for cfg, which was loaded from path.
-func NewManager(path string, cfg *Config) *Manager { return &Manager{path: path, cfg: cfg} }
+func NewManager(path string, cfg *Config) *Manager { return &Manager{path: path, cfg: cfg, fresh: cfg} }
+
+// SetLoader says how to read the configuration again, the way it was read at start.
+func (m *Manager) SetLoader(f func() (*Config, error)) { m.loader = f }
+
+// Reload reads the configuration again (after a save) and returns it. The settings
+// that do not need a restart are meant to be applied from it.
+func (m *Manager) Reload() (*Config, error) {
+	if m.loader == nil {
+		return nil, errors.New("this setup cannot reload its configuration")
+	}
+	c, err := m.loader()
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	m.fresh = c
+	m.mu.Unlock()
+	return c, nil
+}
 
 // ConfigPath is the config file the multiplexer was started with.
 func (m *Manager) ConfigPath() string { return m.path }
@@ -169,14 +195,35 @@ func (m *Manager) ConfigPath() string { return m.path }
 // FilePath is where the web-edited settings are stored.
 func (m *Manager) FilePath() string { return filepath.Join(m.cfg.StateDir, settingsFile) }
 
-// Values returns the settings in effect, by key.
-func (m *Manager) Values() map[string]any {
-	b, _ := json.Marshal(m.cfg)
+// settingValues maps a configuration to the schema's keys.
+func settingValues(c *Config) map[string]any {
+	b, _ := json.Marshal(c)
 	var all map[string]any
 	json.Unmarshal(b, &all)
 	out := map[string]any{}
 	for _, f := range schema {
 		if v, ok := getPath(all, f.Key); ok {
+			out[f.Key] = v
+		}
+	}
+	return out
+}
+
+// Values returns the settings in effect, by key: what is running for the ones that
+// need a restart to change, and the latest saved value for the others (they are
+// applied as soon as they are saved).
+func (m *Manager) Values() map[string]any {
+	m.mu.Lock()
+	fresh := m.fresh
+	m.mu.Unlock()
+	running, latest := settingValues(m.cfg), settingValues(fresh)
+	out := map[string]any{}
+	for _, f := range schema {
+		src := latest
+		if f.Restart {
+			src = running
+		}
+		if v, ok := src[f.Key]; ok {
 			if f.Type == "duration" && v == "0s" && !f.ZeroOff {
 				v = "" // not set: the built-in default applies (shown as the placeholder)
 			}
@@ -387,4 +434,43 @@ func (m *Manager) Save(changes map[string]any) error {
 		return fmt.Errorf("cannot write %s: %w", dst, err)
 	}
 	return nil
+}
+
+// PendingRestart lists the settings that were saved but need a restart to take
+// effect: their saved value differs from what is running.
+func (m *Manager) PendingRestart() []string {
+	m.mu.Lock()
+	fresh := m.fresh
+	m.mu.Unlock()
+	running, latest := settingValues(m.cfg), settingValues(fresh)
+	keys := []string{}
+	for _, f := range schema {
+		if f.Restart && !sameJSON(running[f.Key], latest[f.Key]) {
+			keys = append(keys, f.Key)
+		}
+	}
+	return keys
+}
+
+func sameJSON(a, b any) bool {
+	x, _ := json.Marshal(a)
+	y, _ := json.Marshal(b)
+	return string(x) == string(y)
+}
+
+// restartKeys are the settings that are read once, at start. Everything else in
+// the schema is applied as soon as it is saved.
+var restartKeys = map[string]bool{
+	"friendly_name": true, "device_id": true, "virtual_tuners": true, "discoverable": true,
+	"bind": true, "http_listen": true, "stream_listen": true, "control_listen": true, "advertise_host": true,
+	"ssdp": true, "ssdp_ipv4": true, "ssdp_ipv6": true, "ssdp_atsc3": true,
+	"upstream.discover": true, "upstream.devices": true, "upstream.allow": true, "upstream.tuners": true,
+	"upstream.exclude": true, "upstream.mask": true, "upstream.mode": true, "upstream.stream_port": true,
+	"lineup.channel_map": true, "lineup.scan_on_start": true, "guide.start_delay": true, "pprof_listen": true,
+}
+
+func init() {
+	for i := range schema {
+		schema[i].Restart = restartKeys[schema[i].Key]
+	}
 }
