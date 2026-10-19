@@ -160,7 +160,7 @@ function statCard(label, value, unit, sub, extra = '', cls = '') {
 
 function updateActivity(a) {
   const nowSec = a.time / 1000, S = a.summary;
-  $('#device-sub').textContent = `${a.device.model} · ${a.device.id} · up ${dur(a.device.uptime)}`;
+  $('#device-sub').textContent = `${a.device.model} · ${a.device.id}${a.device.version ? ' · v' + a.device.version.replace(/^v/, '') : ''} · up ${dur(a.device.uptime)}`;
   $('#foot-note').textContent = `Updated ${new Date(a.time).toLocaleTimeString()}`;
   for (const t of a.tuners) {
     const h = history.get(t.index) || [];

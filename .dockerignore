@@ -1,2 +1,5 @@
-bin/
-.git/
+bin
+dist
+.git
+.tmp_edit
+docs

@@ -271,6 +271,27 @@ Settings page's Restart button work, and brings the multiplexer back after a reb
 The default ports are 80, 5004 and 65001: change `http_listen` if something else on the machine uses
 port 80.
 
+### Installing
+
+| How | |
+|---|---|
+| Docker | `docker run -d --name hdhr-mux --network host --restart unless-stopped -v hdhr-mux-state:/var/lib/hdhr-mux ghcr.io/hdhrgit/hdhr-mux` (linux/amd64, arm64, arm/v7). Works with no config file: pass `-e HDHOMERUN_DEVICES=ip,ip` or use the Settings page. |
+| Debian, Ubuntu, Raspberry Pi OS | `sudo apt install ./hdhr-mux_VERSION_ARCH.deb` (amd64, arm64, armhf) |
+| Fedora, RHEL, Rocky, openSUSE | `sudo dnf install ./hdhr-mux-VERSION-1.ARCH.rpm` (x86_64, aarch64, armv7hl) |
+| Any Linux | the tarball: binaries, `config.example.json` and a systemd unit |
+
+Packages install `/usr/bin/hdhr-mux`, a systemd unit running as the `hdhr-mux` user, a small
+`/etc/hdhr-mux/config.json` (kept on upgrade) and the state directory `/var/lib/hdhr-mux`. Then:
+`sudo systemctl enable --now hdhr-mux` and open `http://HOST/ui/`. `scripts/release.sh VERSION` builds all of
+them (tarballs, deb, rpm for the three architectures) with nothing but Docker; the release workflow
+does that, and pushes the multi-architecture image, when a `vX.Y.Z` tag is pushed.
+
+**In an LXC container** (Proxmox, LXD): install the .deb inside it and use the systemd unit, as on any
+Debian. What matters is the container's network: it needs its own address on your LAN (bridged, for
+example Proxmox's `vmbr0`, or macvlan), not a NATed container network, or HDHomeRun discovery
+(UDP broadcast) and SSDP (multicast) do not reach it in either direction. Its disk is the container's own
+disk, so the state directory is kept. Not yet tried on LXC.
+
 ### Configuration
 
 See [config.example.json](config.example.json). Notable keys:

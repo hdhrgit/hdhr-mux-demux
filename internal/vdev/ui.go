@@ -137,10 +137,11 @@ type uiStream struct {
 type uiActivity struct {
 	Time   int64 `json:"time"` // unix milliseconds
 	Device struct {
-		ID     string `json:"id"`
-		Name   string `json:"name"`
-		Model  string `json:"model"`
-		Uptime int64  `json:"uptime"` // seconds
+		ID      string `json:"id"`
+		Version string `json:"version,omitempty"`
+		Name    string `json:"name"`
+		Model   string `json:"model"`
+		Uptime  int64  `json:"uptime"` // seconds
 	} `json:"device"`
 	Summary struct {
 		Viewers      int `json:"viewers"`
@@ -281,6 +282,7 @@ func (d *Device) activity() uiActivity {
 	a.Device.ID = hdhrproto.FormatDeviceID(d.cfg.DeviceID)
 	a.Device.Name = d.cfg.FriendlyName
 	a.Device.Model = d.cfg.ModelNumber
+	a.Device.Version = d.cfg.Version
 	a.Device.Uptime = int64(now.Sub(processStarted).Seconds())
 
 	pool := d.hub.Pool()

@@ -1,0 +1,24 @@
+[Unit]
+Description=HDHomeRun multiplexer
+Documentation=https://github.com/hdhrgit/hdhr-mux-demux
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=hdhr-mux
+Group=hdhr-mux
+ExecStart=/usr/bin/hdhr-mux -config /etc/hdhr-mux/config.json
+# The settings page's Restart button exits with status 3; any exit is restarted.
+Restart=always
+RestartSec=3
+# ports 80, 5004 and 65001 (UDP discovery)
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+StateDirectory=hdhr-mux
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
