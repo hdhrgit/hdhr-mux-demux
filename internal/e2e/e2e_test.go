@@ -2969,3 +2969,54 @@ func TestSettingsLockedAndAbsent(t *testing.T) {
 		t.Errorf("without a manager the settings are absent: %v %v", err, r)
 	}
 }
+
+// A tuner another application is using shows up as such on the activity page,
+// with who holds it: from the device's side a program on this machine has the
+// same address as the multiplexer, which the page says.
+func TestActivityShowsOtherApplications(t *testing.T) {
+	e := setup(t, []int{4}, 4, nil)
+	foreign, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/tuner2/ch473000000", e.fakes[0].StreamPort()))
+	if err != nil || foreign.StatusCode != 200 {
+		t.Fatalf("foreign client: %v %v", foreign, err)
+	}
+	defer foreign.Body.Close()
+
+	var a struct {
+		Summary struct{ OtherTuners, TunersInUse int }
+		Tuners  []struct {
+			Index       int
+			State       string
+			Frequency   uint64
+			Holder      string
+			HolderLocal bool
+			Transport   string
+		}
+	}
+	waitFor(t, "the other application on the activity page", 5*time.Second, func() bool {
+		a = struct {
+			Summary struct{ OtherTuners, TunersInUse int }
+			Tuners  []struct {
+				Index       int
+				State       string
+				Frequency   uint64
+				Holder      string
+				HolderLocal bool
+				Transport   string
+			}
+		}{}
+		getJSON(t, e.api+"/ui/api/activity", &a)
+		return len(a.Tuners) == 4 && a.Tuners[2].State == "other"
+	})
+	o := a.Tuners[2]
+	if o.Frequency != 473000000 || o.Holder != "127.0.0.1" || !o.HolderLocal || o.Transport != "http" {
+		t.Errorf("tuner 2: %+v", o)
+	}
+	if a.Summary.OtherTuners != 1 || a.Summary.TunersInUse != 0 {
+		t.Errorf("summary %+v", a.Summary)
+	}
+	for _, i := range []int{0, 1, 3} {
+		if a.Tuners[i].State != "idle" || a.Tuners[i].Holder != "" {
+			t.Errorf("tuner %d: %+v", i, a.Tuners[i])
+		}
+	}
+}

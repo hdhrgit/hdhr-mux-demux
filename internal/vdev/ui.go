@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"hdhrmux/internal/hdhrproto"
@@ -108,15 +109,19 @@ type uiViewer struct {
 }
 
 type uiTuner struct {
-	Index     int        `json:"index"`
-	Physical  string     `json:"physical"`
-	PhysURL   string     `json:"physicalUrl,omitempty"` // the device's own status page for this tuner
-	State     string     `json:"state"`                 // idle, watching, other
-	Frequency uint64     `json:"frequency,omitempty"`
-	Signal    *uiSignal  `json:"signal,omitempty"`
-	RxBPS     int        `json:"rxBps"` // pulled from the device
-	TxBPS     int        `json:"txBps"` // delivered to clients
-	Viewers   []uiViewer `json:"viewers"`
+	Index     int       `json:"index"`
+	Physical  string    `json:"physical"`
+	PhysURL   string    `json:"physicalUrl,omitempty"` // the device's own status page for this tuner
+	State     string    `json:"state"`                 // idle, watching, other
+	Frequency uint64    `json:"frequency,omitempty"`
+	Signal    *uiSignal `json:"signal,omitempty"`
+	RxBPS     int       `json:"rxBps"` // pulled from the device
+	TxBPS     int       `json:"txBps"` // delivered to clients
+	// For state "other": who holds the physical tuner, as the device reports it.
+	Holder      string     `json:"holder,omitempty"`      // address holding the lock
+	HolderLocal bool       `json:"holderLocal,omitempty"` // ... and it is this machine
+	Transport   string     `json:"transport,omitempty"`   // udp, rtp or http: how it receives
+	Viewers     []uiViewer `json:"viewers"`
 }
 
 type uiStream struct {
@@ -169,6 +174,61 @@ func (d *Device) entryFor(label string) (lineup.Entry, bool) {
 		}
 	}
 	return lineup.Entry{}, false
+}
+
+// holderOf says who holds physical tuner idx: the address with the lock, whether
+// that is this machine (another program here, such as tvheadend, looks exactly
+// like us from the device's side), and how it receives the stream. Answers are
+// cached for a few seconds: the activity page asks every two.
+func (d *Device) holderOf(idx int) (holder string, local bool, transport string) {
+	holderMu.Lock()
+	c, ok := holderCache[idx]
+	holderMu.Unlock()
+	if ok && time.Since(c.at) < 4*time.Second {
+		return c.holder, c.local, c.transport
+	}
+	pool := d.hub.Pool()
+	if ref, found := pool.Resolve(idx); found && ref.Device != nil {
+		if v, err := pool.RawGet(ref.DeviceID, ref.Index, "lockkey"); err == nil && net.ParseIP(v) != nil {
+			holder = v
+			local = isLocalAddress(net.ParseIP(v))
+		}
+		if v, err := pool.RawGet(ref.DeviceID, ref.Index, "target"); err == nil {
+			if scheme, _, ok := strings.Cut(v, "://"); ok {
+				transport = scheme
+			}
+		}
+	}
+	holderMu.Lock()
+	holderCache[idx] = holderInfo{holder, local, transport, time.Now()}
+	holderMu.Unlock()
+	return holder, local, transport
+}
+
+type holderInfo struct {
+	holder    string
+	local     bool
+	transport string
+	at        time.Time
+}
+
+var (
+	holderMu    sync.Mutex
+	holderCache = map[int]holderInfo{}
+)
+
+// isLocalAddress reports whether ip is one of this machine's own addresses.
+func isLocalAddress(ip net.IP) bool {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		if ipn, ok := a.(*net.IPNet); ok && ipn.IP.Equal(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // physURL is the address of the status page a physical tuner's own device
@@ -244,6 +304,7 @@ func (d *Device) activity() uiActivity {
 				t.Frequency, _ = strconv.ParseUint(f, 10, 64)
 			}
 			t.State = "other"
+			t.Holder, t.HolderLocal, t.Transport = d.holderOf(v.idx)
 			t.RxBPS = st.BPS
 			t.Signal = &uiSignal{st.SS, st.SNQ, st.SEQ}
 			a.Summary.OtherTuners++
