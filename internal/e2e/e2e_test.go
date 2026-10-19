@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -55,19 +56,28 @@ type env struct {
 
 // Knobs a test may set (and must restore) before calling setup.
 var (
-	testMode   = ""                        // upstream transport: "" = http, or "rtp"
-	testLinger = time.Duration(0)          // hub linger
-	testBuffer = 0                         // hub client buffer in bytes (0 = default)
-	testTuners func(ids []uint32) []string // upstream tuner list, built from the fake device IDs
-	testMask   = false                     // ask the devices to send only the PIDs being watched
+	testMode     = ""                        // upstream transport: "" = http, or "rtp"
+	testLinger   = time.Duration(0)          // hub linger
+	testBuffer   = 0                         // hub client buffer in bytes (0 = default)
+	testTuners   func(ids []uint32) []string // upstream tuner list, built from the fake device IDs
+	testChannels []fakehdhr.Channel          // what the fake devices broadcast (nil = channels)
+	testMask     = false                     // ask the devices to send only the PIDs being watched
+	testModels   []string                    // device models by index (default: ATSC 3.0 capable)
 )
+
+func model(i int) string {
+	if i < len(testModels) {
+		return testModels[i]
+	}
+	return ""
+}
 
 func setup(t *testing.T, physTuners []int, virtual int, mod func(*vdev.Config)) *env {
 	t.Helper()
 	e := &env{t: t}
 	var addrs []string
 	for i, n := range physTuners {
-		f, err := fakehdhr.Start(fakehdhr.Config{DeviceID: hdhrproto.MakeDeviceID(0x10200000 + uint32(i)<<8), Tuners: n, Channels: channels})
+		f, err := fakehdhr.Start(fakehdhr.Config{DeviceID: hdhrproto.MakeDeviceID(0x10200000 + uint32(i)<<8), Tuners: n, Channels: pick(testChannels, channels), Model: model(i)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -551,12 +561,13 @@ func TestControlProtocolAndRTP(t *testing.T) {
 	if v := mustGet("/tuner0/target"); !strings.HasPrefix(v, "rtp://") {
 		t.Fatalf("target %q", v)
 	}
-	// An HTTP viewer on the same RF channel joins the same physical tuner.
+	// A tuner a control client has tuned is its own, as on a real device: an /auto/
+	// viewer of the same RF channel gets another tuner rather than riding on it.
 	h, _ := e.open("/auto/v7.1")
 	defer h.close()
 	h.read(t, 188*20)
-	if e.activePhysical() != 1 {
-		t.Fatalf("expected 1 physical tuner, got %d", e.activePhysical())
+	if e.activePhysical() != 2 {
+		t.Fatalf("expected 2 physical tuners (the control client's and the /auto/ viewer's), got %d", e.activePhysical())
 	}
 	h.close()
 
@@ -1096,65 +1107,82 @@ func TestErrorHeadersLikeRealDevice(t *testing.T) {
 // A request for a specific tuner that is busy is first checked against what
 // the tuner carries: the same RF channel (or ATSC 3.0 service) can be served
 // by joining it, only a different channel gets "804 Tuner In Use".
-func TestSpecificBusyTunerJoins(t *testing.T) {
-	e := setup(t, []int{2}, 2, func(c *vdev.Config) {})
+// A tuner asked for by number belongs to the client that asked, as on a real
+// device: busy is busy, even when the other client wants the same channel. Sharing
+// is for /auto/ requests, which join each other but not a tuner somebody asked
+// for directly.
+func TestDirectRequestsAreNotShared(t *testing.T) {
+	e := setup(t, []int{3}, 3, nil)
 	e.lu.Replace(append(append(append([]lineup.Entry{}, testLineup...), extraLineup...), atsc3Lineup...))
 
-	a, _ := e.open("/tuner0/v7.1")
+	a, ra := e.open("/tuner0/v7.1")
 	if a == nil {
 		t.Fatal("first viewer refused")
 	}
 	defer a.close()
 	a.read(t, 188*20)
-
-	b, resp := e.open("/tuner0/v7.2") // same RF channel, other program
-	if b == nil {
-		t.Fatalf("same-channel request on busy tuner0 refused: %d %v", resp.StatusCode, resp.Header)
-	}
-	defer b.close()
-	an := analyze(t, b.read(t, 188*100))
-	if an.ccErrors != 0 || len(an.esProgs) != 1 || !an.esProgs[2] {
-		t.Fatalf("joined viewer got %v (cc=%d), want only program 2", an.esProgs, an.ccErrors)
-	}
-	if e.activePhysical() != 1 {
-		t.Fatalf("joining used %d physical tuners", e.activePhysical())
+	if ra.Header.Get("X-HDHomeRun-Resource") != "tuner0" {
+		t.Fatalf("resource %q", ra.Header.Get("X-HDHomeRun-Resource"))
 	}
 
-	_, resp = e.open("/tuner0/v14.1") // different RF channel
-	if resp.StatusCode != 503 || resp.Header.Get("X-HDHomeRun-Error") != "804 Tuner In Use" {
-		t.Fatalf("different channel on busy tuner: %d %v", resp.StatusCode, resp.Header)
+	// the same RF channel (other programme, same programme) on the busy tuner: 804
+	for _, ch := range []string{"v7.2", "v7.1"} {
+		if _, resp := e.open("/tuner0/" + ch); resp.StatusCode != 503 || resp.Header.Get("X-HDHomeRun-Error") != "804 Tuner In Use" {
+			t.Fatalf("/tuner0/%s on a busy tuner: %d %v", ch, resp.StatusCode, resp.Header)
+		}
 	}
 
-	// the first viewer leaving must not take the tuner away from the second
-	a.close()
-	time.Sleep(300 * time.Millisecond)
-	b.read(t, 188*50)
-	_, resp = e.open("/tuner0/v14.1")
-	if resp.StatusCode != 503 {
-		t.Fatalf("tuner0 was freed while a viewer remains: %d", resp.StatusCode)
-	}
-	b.close()
-	waitFor(t, "tuner released with the last viewer", 3*time.Second, func() bool { return e.activePhysical() == 0 })
-	c, resp := e.open("/tuner0/v14.1")
+	// an /auto/ request for that channel does not ride on tuner 0 either
+	c, rc := e.open("/auto/v7.2")
 	if c == nil {
-		t.Fatalf("tuner0 still busy after everyone left: %d", resp.StatusCode)
+		t.Fatal("/auto/ refused")
 	}
-	c.close()
+	defer c.close()
+	c.read(t, 188*20)
+	if r := rc.Header.Get("X-HDHomeRun-Resource"); r == "tuner0" || r == "" {
+		t.Fatalf("/auto/ joined the tuner somebody asked for by number: %q", r)
+	}
+	if n := e.activePhysical(); n != 2 {
+		t.Fatalf("%d physical tuners, want 2 (tuner 0 for its owner, one for /auto/)", n)
+	}
 
-	// ATSC 3.0: only the identical service joins
+	// ... but /auto/ viewers share with each other
+	d, rd := e.open("/auto/v7.1")
+	if d == nil {
+		t.Fatal("second /auto/ viewer refused")
+	}
+	defer d.close()
+	if an := analyze(t, d.read(t, 188*100)); an.ccErrors != 0 || len(an.esProgs) != 1 || !an.esProgs[1] {
+		t.Fatalf("shared /auto/ viewer got %v (cc=%d)", an.esProgs, an.ccErrors)
+	}
+	if rd.Header.Get("X-HDHomeRun-Resource") != rc.Header.Get("X-HDHomeRun-Resource") {
+		t.Fatalf("the second /auto/ viewer should share tuner %q, got %q", rc.Header.Get("X-HDHomeRun-Resource"), rd.Header.Get("X-HDHomeRun-Resource"))
+	}
+	if n := e.activePhysical(); n != 2 {
+		t.Fatalf("%d physical tuners after /auto/ sharing, want 2", n)
+	}
+
+	// the owner leaving frees its tuner
+	a.close()
+	waitFor(t, "tuner 0 released with its owner", 3*time.Second, func() bool {
+		x, resp := e.open("/tuner0/v14.1")
+		if x != nil {
+			x.close()
+		}
+		return resp.StatusCode == 200
+	})
+	c.close()
+	d.close()
+
+	// ATSC 3.0: one tuner per service as before, and a busy one is just busy
+	waitFor(t, "everything released", 4*time.Second, func() bool { return e.activePhysical() == 0 })
 	d1, _ := e.open("/tuner1/v104.1")
 	if d1 == nil {
 		t.Fatal("ATSC 3.0 viewer refused")
 	}
 	defer d1.close()
-	d2, resp := e.open("/tuner1/v104.1")
-	if d2 == nil {
-		t.Fatalf("same ATSC 3.0 service refused: %d", resp.StatusCode)
-	}
-	defer d2.close()
-	_, resp = e.open("/tuner1/v107.1")
-	if resp.StatusCode != 503 || resp.Header.Get("X-HDHomeRun-Error") != "804 Tuner In Use" {
-		t.Fatalf("other ATSC 3.0 service on a busy tuner: %d %v", resp.StatusCode, resp.Header)
+	if _, resp := e.open("/tuner1/v104.1"); resp.StatusCode != 503 {
+		t.Fatalf("the same ATSC 3.0 service by number on a busy tuner: %d", resp.StatusCode)
 	}
 }
 
@@ -1181,23 +1209,34 @@ func TestStrictMappingAndReuse(t *testing.T) {
 	if got := e.fakes[0].TunedChannels(); got[0] == "none" || got[1] == "none" || got[2] != "none" || got[3] != "none" {
 		t.Fatalf("physical tuners in use %v, want exactly 0 and 1", got)
 	}
-	// /auto/ for the same channel joins an existing tuner instead of a third
+	// /auto/ does not ride on tuners that were asked for by number: it takes a third,
+	// and a second /auto/ viewer then shares that one
 	c, rc := e.open("/auto/v7.1")
 	if c == nil {
 		t.Fatal("auto refused")
 	}
 	defer c.close()
-	if r := rc.Header.Get("X-HDHomeRun-Resource"); r != "tuner0" && r != "tuner1" {
-		t.Fatalf("a joined viewer must be told the tuner it shares, got %q", r)
+	r := rc.Header.Get("X-HDHomeRun-Resource")
+	if r == "tuner0" || r == "tuner1" || r == "" {
+		t.Fatalf("/auto/ rode on a tuner somebody asked for by number: %q", r)
 	}
 	c.read(t, 188*20)
-	if got := e.activePhysical(); got != 2 {
-		t.Fatalf("/auto/ opened another tuner (%d active) instead of reusing", got)
+	d, rd := e.open("/auto/v7.2")
+	if d == nil {
+		t.Fatal("auto refused")
+	}
+	defer d.close()
+	if rd.Header.Get("X-HDHomeRun-Resource") != r {
+		t.Fatalf("the second /auto/ viewer should share %q, got %q", r, rd.Header.Get("X-HDHomeRun-Resource"))
+	}
+	d.read(t, 188*20)
+	if got := e.activePhysical(); got != 3 {
+		t.Fatalf("%d physical tuners active, want 3 (two by number, one shared by two /auto/ viewers)", got)
 	}
 	var st []map[string]any
 	getJSON(t, e.api+"/status.json", &st)
-	if st[2]["VctNumber"] != nil || st[3]["VctNumber"] != nil {
-		t.Fatalf("/auto/ occupied a free virtual tuner: %v", st)
+	if st[3]["VctNumber"] != nil {
+		t.Fatalf("the unused virtual tuner shows a channel: %v", st[3])
 	}
 }
 
@@ -2302,5 +2341,509 @@ func TestPlaylistM3U(t *testing.T) {
 	}
 	if _, b := count("/playlist.m3u?group=none"); strings.Contains(b, "group-title") {
 		t.Errorf("group=none: %s", b)
+	}
+}
+
+// A rescan is handed to one device's own scan: an ATSC 3.0 capable one when
+// there is a choice, never one that is in use, and the lineup is re-read from the
+// devices afterwards. The device's tuners refuse streams while it scans.
+func TestRescanIsHandedToADevice(t *testing.T) {
+	old := testModels
+	testModels = []string{"hdhomerun_atsc", "hdhomerun5_atsc3"} // device 0 cannot do ATSC 3.0, device 1 can
+	t.Cleanup(func() { testModels = old })
+	e := setup(t, []int{2, 2}, 4, func(c *vdev.Config) {
+		c.ScanMode, c.ScanPollInterval = "device", 100*time.Millisecond
+	})
+	for _, f := range e.fakes {
+		f.HideFromLineup("7.2") // the channel only a scan finds
+	}
+	ctx := context.Background()
+	if err := e.dev.RefreshLineup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	has := func(n string) bool { _, ok := e.lu.Find(n); return ok }
+	if has("7.2") {
+		t.Fatal("7.2 should not be listed before the scan")
+	}
+
+	post := func() int {
+		r, err := http.Post(e.api+"/lineup.post?scan=start&source=Antenna", "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		return r.StatusCode
+	}
+	if code := post(); code != 200 {
+		t.Fatalf("rescan: %d", code)
+	}
+	if n, src := e.fakes[1].ScanRequests(); n != 1 || src != "Antenna" {
+		t.Fatalf("the ATSC 3.0 device should have been asked once, got %d (%q)", n, src)
+	}
+	if n, _ := e.fakes[0].ScanRequests(); n != 0 {
+		t.Fatalf("the other device was asked to scan too: %d", n)
+	}
+	var st map[string]any
+	getJSON(t, e.api+"/lineup_status.json", &st)
+	if st["ScanInProgress"] != float64(1) {
+		t.Fatalf("lineup_status while scanning: %v", st)
+	}
+	if code := post(); code != 409 {
+		t.Errorf("a second rescan while one runs: %d, want 409", code)
+	}
+	// the scanning device's tuners (2 and 3) refuse streams; /auto/ goes to the other device
+	if _, resp := e.open("/tuner2/v7.1"); resp.StatusCode != 503 || resp.Header.Get("X-HDHomeRun-Error") != "804 Tuner In Use" {
+		t.Errorf("a tuner of the scanning device: %d %v", resp.StatusCode, resp.Header)
+	}
+	h, rh := e.open("/auto/v14.1")
+	if h == nil {
+		t.Fatalf("/auto/ refused during a scan: %d", rh.StatusCode)
+	}
+	if r := rh.Header.Get("X-HDHomeRun-Resource"); r != "tuner0" && r != "tuner1" {
+		t.Errorf("/auto/ used %s, a tuner of the scanning device", r)
+	}
+	h.close()
+
+	waitFor(t, "the scan to finish", 5*time.Second, func() bool {
+		var s map[string]any
+		getJSON(t, e.api+"/lineup_status.json", &s)
+		return s["ScanInProgress"] == float64(0)
+	})
+	waitFor(t, "the channel the scan found", 3*time.Second, func() bool { return has("7.2") })
+	c, _ := e.open("/tuner2/v14.1")
+	if c == nil {
+		t.Fatal("tuner 2 should be usable once the scan is over")
+	}
+	c.close()
+
+	// busy devices are not scanned with: with a viewer on the ATSC 3.0 device the
+	// other one is used, and with both busy the request is refused
+	waitFor(t, "released", 4*time.Second, func() bool { return e.activePhysical() == 0 })
+	v1, _ := e.open("/tuner2/v7.1")
+	if v1 == nil {
+		t.Fatal("viewer refused")
+	}
+	defer v1.close()
+	v1.read(t, 188*20)
+	if code := post(); code != 200 {
+		t.Fatalf("rescan with one device busy: %d", code)
+	}
+	if n, _ := e.fakes[0].ScanRequests(); n != 1 {
+		t.Fatalf("the idle device should have scanned: %d", n)
+	}
+	waitFor(t, "the scan to finish", 5*time.Second, func() bool {
+		var s map[string]any
+		getJSON(t, e.api+"/lineup_status.json", &s)
+		return s["ScanInProgress"] == float64(0)
+	})
+	time.Sleep(2200 * time.Millisecond) // the tuners rest briefly after a scan
+	v0, _ := e.open("/tuner0/v7.1")
+	if v0 == nil {
+		t.Fatal("viewer refused")
+	}
+	defer v0.close()
+	v0.read(t, 188*20)
+	if code := post(); code != 409 {
+		t.Fatalf("rescan with every device busy: %d, want 409", code)
+	}
+	if n, _ := e.fakes[1].ScanRequests(); n != 1 {
+		t.Errorf("a busy device was asked to scan: %d", n)
+	}
+}
+
+// Channels DVR tells the tuner it was given to let go ("set channel none",
+// "set target none") every time one of its streams ends. With /auto/ viewers
+// sharing a tuner, that must not cut the viewers that are still watching.
+func TestClearingASharedTunerKeepsTheOtherViewers(t *testing.T) {
+	e := setup(t, []int{3}, 3, nil)
+	a, ra := e.open("/auto/v7.1")
+	b, rb := e.open("/auto/v7.2") // the same RF channel: shares the tuner
+	if a == nil || b == nil {
+		t.Fatal("streams refused")
+	}
+	defer a.close()
+	defer b.close()
+	res := ra.Header.Get("X-HDHomeRun-Resource")
+	if res == "" || res != rb.Header.Get("X-HDHomeRun-Resource") {
+		t.Fatalf("the viewers should share a tuner: %q %q", res, rb.Header.Get("X-HDHomeRun-Resource"))
+	}
+	a.read(t, 188*50)
+	b.read(t, 188*50)
+
+	ctl := hdhrproto.NewControl(e.ctl)
+	defer ctl.Close()
+	if _, err := ctl.Set("/"+res+"/target", "none", 0); err != nil {
+		t.Fatalf("target none: %v", err)
+	}
+	if _, err := ctl.Set("/"+res+"/channel", "none", 0); err != nil {
+		t.Fatalf("channel none: %v", err)
+	}
+	// both streams carry on
+	if an := analyze(t, a.read(t, 188*200)); !an.esProgs[1] || an.ccErrors != 0 {
+		t.Fatalf("viewer A after the clear: %v cc=%d", an.esProgs, an.ccErrors)
+	}
+	if an := analyze(t, b.read(t, 188*200)); !an.esProgs[2] || an.ccErrors != 0 {
+		t.Fatalf("viewer B after the clear: %v cc=%d", an.esProgs, an.ccErrors)
+	}
+	// retuning it to another channel is refused while viewers are on it
+	if _, err := ctl.Set("/"+res+"/channel", "auto:473000000", 0); err == nil || !strings.Contains(err.Error(), "resource locked") {
+		t.Fatalf("a retune under viewers: %v", err)
+	}
+	if n := e.activePhysical(); n != 1 {
+		t.Fatalf("%d physical tuners", n)
+	}
+
+	// with nobody on it, clearing works as before
+	a.close()
+	b.close()
+	waitFor(t, "released", 4*time.Second, func() bool { return e.activePhysical() == 0 })
+	if _, err := ctl.Set("/"+res+"/channel", "none", 0); err != nil {
+		t.Fatalf("channel none on an idle tuner: %v", err)
+	}
+}
+
+// A control client that picks PIDs (tvheadend) never says which channel it is
+// watching; the activity page works it out from the programme its PIDs belong to.
+func TestActivityNamesTheChannelAPIDClientWatches(t *testing.T) {
+	e := setup(t, []int{2}, 2, nil)
+	ctl := hdhrproto.NewControl(e.ctl)
+	defer ctl.Close()
+	rx, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rx.Close()
+	set := func(name, val string) {
+		t.Helper()
+		if _, err := ctl.Set(name, val, 0); err != nil {
+			t.Fatalf("set %s %s: %v", name, val, err)
+		}
+	}
+	set("/tuner0/channel", "auto:177000000")
+	// the PAT, the PMTs it wants to look at, and the video and audio of the second programme (7.2)
+	// and the video of the first (which is not complete: its audio is missing)
+	set("/tuner0/filter", "0x0000 0x0100 0x0110 0x0101 0x0111-0x0112")
+	set("/tuner0/target", "udp://"+rx.LocalAddr().String())
+
+	var a struct {
+		Tuners []struct {
+			State   string
+			Viewers []struct{ Channel, Name string }
+		}
+	}
+	waitFor(t, "the programme behind the filter", 6*time.Second, func() bool {
+		a.Tuners = nil
+		getJSON(t, e.api+"/ui/api/activity", &a)
+		return len(a.Tuners) > 0 && len(a.Tuners[0].Viewers) == 1 && a.Tuners[0].Viewers[0].Channel == "7.2"
+	})
+	if v := a.Tuners[0].Viewers[0]; v.Name != "BETA" {
+		t.Errorf("viewer %+v", v)
+	}
+	// every channel that is completely included is listed, one row each
+	set("/tuner0/filter", "0x0000 0x0101-0x0102 0x0111-0x0112")
+	waitFor(t, "both programmes named", 6*time.Second, func() bool {
+		a.Tuners = nil
+		getJSON(t, e.api+"/ui/api/activity", &a)
+		return len(a.Tuners[0].Viewers) == 2 && a.Tuners[0].Viewers[0].Channel == "7.1" && a.Tuners[0].Viewers[1].Channel == "7.2"
+	})
+	// discovery-only filters (PMTs but no elementary streams) complete no programme:
+	// the client is collecting tables, which is a scan, not a channel
+	set("/tuner0/filter", "0x0000 0x0100 0x0110")
+	waitFor(t, "a scan, not a channel", 6*time.Second, func() bool {
+		a.Tuners = nil
+		getJSON(t, e.api+"/ui/api/activity", &a)
+		return len(a.Tuners[0].Viewers) == 1 && a.Tuners[0].Viewers[0].Channel == "EPG scan" && a.Tuners[0].Viewers[0].Name == "177 MHz"
+	})
+}
+
+// tvheadend (control protocol, picks PIDs) holds a tuner; an /auto/ request for a
+// channel on it joins that tuner instead of taking another, when auto_join_direct
+// is on. The joiner gets its own programme whatever the filter does, and keeps the
+// tuner when tvheadend lets go.
+func TestAutoJoinsADirectClient(t *testing.T) {
+	for _, join := range []bool{true, false} {
+		t.Run(fmt.Sprintf("join=%v", join), func(t *testing.T) {
+			e := setup(t, []int{3}, 3, func(c *vdev.Config) { c.AutoJoinDirect = join })
+			ctl := hdhrproto.NewControl(e.ctl)
+			defer ctl.Close()
+			rx, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rx.Close()
+			var udp atomic.Int64
+			go func() {
+				buf := make([]byte, 2048)
+				for {
+					n, _, err := rx.ReadFromUDP(buf)
+					if err != nil {
+						return
+					}
+					udp.Add(int64(n))
+				}
+			}()
+			set := func(name, val string) {
+				t.Helper()
+				if _, err := ctl.Set(name, val, 0); err != nil {
+					t.Fatalf("set %s %s: %v", name, val, err)
+				}
+			}
+			set("/tuner0/channel", "auto:177000000")
+			set("/tuner0/filter", "0x0000 0x0100-0x0102")
+			set("/tuner0/target", "udp://"+rx.LocalAddr().String())
+			waitFor(t, "tvheadend's stream", 4*time.Second, func() bool { return udp.Load() > 188*50 })
+
+			controlSince := func() int64 {
+				var a struct {
+					Tuners []struct {
+						Viewers []struct {
+							Control bool
+							Since   int64
+						}
+					}
+				}
+				getJSON(t, e.api+"/ui/api/activity", &a)
+				for _, tn := range a.Tuners {
+					for _, v := range tn.Viewers {
+						if v.Control {
+							return v.Since
+						}
+					}
+				}
+				return 0
+			}
+			since0 := controlSince()
+			time.Sleep(1200 * time.Millisecond)
+
+			c, rc := e.open("/auto/v7.2")
+			if c == nil {
+				t.Fatal("/auto/ refused")
+			}
+			defer c.close()
+			if an := analyze(t, c.read(t, 188*100)); !an.esProgs[2] || an.esProgs[1] || an.ccErrors != 0 {
+				t.Fatalf("the joiner got %v (cc=%d)", an.esProgs, an.ccErrors)
+			}
+			res := rc.Header.Get("X-HDHomeRun-Resource")
+			if join {
+				if res != "tuner0" || e.activePhysical() != 1 {
+					t.Fatalf("/auto/ should ride on tuner0: %q, %d physical tuners", res, e.activePhysical())
+				}
+			} else {
+				if res == "tuner0" || e.activePhysical() != 2 {
+					t.Fatalf("/auto/ should take its own tuner: %q, %d physical tuners", res, e.activePhysical())
+				}
+				return
+			}
+
+			if s := controlSince(); since0 == 0 || s != since0 {
+				t.Fatalf("tvheadend's time watched changed when the viewer joined: %d -> %d", since0, s)
+			}
+			// tvheadend goes on receiving, and changing its filter leaves the viewer alone
+			before := udp.Load()
+			set("/tuner0/filter", "0x0000 0x0100-0x0102 0x0110-0x0112")
+			if an := analyze(t, c.read(t, 188*200)); !an.esProgs[2] || an.esProgs[1] || an.ccErrors != 0 {
+				t.Fatalf("the joiner after the filter change: %v (cc=%d)", an.esProgs, an.ccErrors)
+			}
+			waitFor(t, "tvheadend still receiving", 3*time.Second, func() bool { return udp.Load() > before+188*50 })
+
+			// tvheadend lets go: the viewer keeps the tuner, and it is freed with the viewer
+			set("/tuner0/target", "none")
+			set("/tuner0/channel", "none")
+			if an := analyze(t, c.read(t, 188*200)); !an.esProgs[2] || an.ccErrors != 0 {
+				t.Fatalf("the joiner after tvheadend let go: %v (cc=%d)", an.esProgs, an.ccErrors)
+			}
+			if n := e.activePhysical(); n != 1 {
+				t.Fatalf("%d physical tuners after tvheadend let go, want 1", n)
+			}
+			c.close()
+			waitFor(t, "the tuner freed with its last viewer", 4*time.Second, func() bool { return e.activePhysical() == 0 })
+		})
+	}
+}
+
+// A control request is unauthenticated and its source can be forged: video is
+// only ever sent to addresses on a private IPv4 network (or this machine).
+func TestTargetsMustBePrivate(t *testing.T) {
+	e := setup(t, []int{1}, 1, nil)
+	ctl := hdhrproto.NewControl(e.ctl)
+	defer ctl.Close()
+	if _, err := ctl.Set("/tuner0/channel", "auto:177000000", 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, tgt := range []string{"udp://8.8.8.8:5000", "rtp://93.184.216.34:5000", "udp://224.0.0.251:5000"} {
+		if _, err := ctl.Set("/tuner0/target", tgt, 0); err == nil {
+			t.Errorf("target %s accepted", tgt)
+		}
+	}
+	for _, tgt := range []string{"udp://127.0.0.1:5000", "rtp://192.168.1.50:5004", "udp://10.0.0.7:1234"} {
+		if _, err := ctl.Set("/tuner0/target", tgt, 0); err != nil {
+			t.Errorf("target %s refused: %v", tgt, err)
+		}
+	}
+	ctl.Set("/tuner0/target", "none", 0)
+}
+
+// A device that receives a station on another frequency than the lineup has it
+// (another antenna, a cable feed): the Activity page still names what a
+// PID-selecting client watches, from the multiplex's own channel table, and calls
+// it a scan only when the client's PIDs complete no programme.
+func TestActivityNamesProgrammesTheLineupDoesNotPlaceHere(t *testing.T) {
+	e := setup(t, []int{2}, 2, nil)
+	moved := []lineup.Entry{
+		{GuideNumber: "7.1", GuideName: "ALPHA", Frequency: 999000000, Program: 1},
+		{GuideNumber: "7.2", GuideName: "BETA", Frequency: 999000000, Program: 2},
+	}
+	e.lu.Replace(moved) // the channels are not where tuner 0 is
+	ctl := hdhrproto.NewControl(e.ctl)
+	defer ctl.Close()
+	rx, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rx.Close()
+	set := func(name, val string) {
+		t.Helper()
+		if _, err := ctl.Set(name, val, 0); err != nil {
+			t.Fatalf("set %s %s: %v", name, val, err)
+		}
+	}
+	set("/tuner0/channel", "auto:177000000")
+	set("/tuner0/filter", "0x0000 0x1ffb 0x0100-0x0102 0x0110-0x0112")
+	set("/tuner0/target", "udp://"+rx.LocalAddr().String())
+	var a struct {
+		Tuners []struct {
+			Viewers []struct {
+				Channel string
+				Scan    bool
+			}
+		}
+	}
+	waitFor(t, "the programmes named from the stream", 8*time.Second, func() bool {
+		a.Tuners = nil
+		getJSON(t, e.api+"/ui/api/activity", &a)
+		if len(a.Tuners) == 0 || len(a.Tuners[0].Viewers) != 2 {
+			return false
+		}
+		v0, v1 := a.Tuners[0].Viewers[0], a.Tuners[0].Viewers[1]
+		return !v0.Scan && !v1.Scan && v0.Channel == "7.1" && v1.Channel == "7.2"
+	})
+}
+
+func pick(a, b []fakehdhr.Channel) []fakehdhr.Channel {
+	if a != nil {
+		return a
+	}
+	return b
+}
+
+// The same station can be received on a second RF channel (another antenna, a
+// feed) that the lineup does not list. A session that already carries it is ridden
+// by /auto/ instead of taking a tuner, when auto_join_other_locations is on.
+func TestAutoRidesASessionAtAnotherLocation(t *testing.T) {
+	for _, ride := range []bool{true, false} {
+		t.Run(fmt.Sprintf("ride=%v", ride), func(t *testing.T) {
+			testChannels = append(append([]fakehdhr.Channel{}, channels...),
+				fakehdhr.Channel{Frequency: 191000000, TSID: 9, Programs: []fakehdhr.Program{{Number: 5, VChannel: "7.1", Name: "ALPHA"}}})
+			defer func() { testChannels = nil }()
+			e := setup(t, []int{3}, 3, func(c *vdev.Config) { c.AutoJoinOtherLocations, c.AutoJoinDirect = ride, true })
+			ctl := hdhrproto.NewControl(e.ctl)
+			defer ctl.Close()
+			rx, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rx.Close()
+			// somebody (tvheadend) is on 191 MHz, where the lineup does not put 7.1
+			for name, val := range map[string]string{"channel": "auto:191000000", "target": "udp://" + rx.LocalAddr().String()} {
+				if _, err := ctl.Set("/tuner0/"+name, val, 0); err != nil {
+					t.Fatalf("set %s: %v", name, err)
+				}
+			}
+			waitFor(t, "its channel table", 6*time.Second, func() bool { return len(e.hub.CarryingChannel("7.1")) > 0 })
+			// streams teach the lineup where they saw a channel; the lineup's place is 177 MHz
+			e.lu.Replace(testLineup)
+
+			c, rc := e.open("/auto/v7.1")
+			if c == nil {
+				t.Fatal("/auto/ refused")
+			}
+			defer c.close()
+			res := rc.Header.Get("X-HDHomeRun-Resource")
+			an := analyze(t, c.read(t, 188*200))
+			if an.ccErrors != 0 {
+				t.Fatalf("continuity errors %d", an.ccErrors)
+			}
+			if ride {
+				if res != "tuner0" || !an.esProgs[5] || e.activePhysical() != 1 {
+					t.Fatalf("should ride tuner0 at 191 MHz: %q programmes %v, %d physical tuners", res, an.esProgs, e.activePhysical())
+				}
+			} else if res == "tuner0" || !an.esProgs[1] || e.activePhysical() != 2 {
+				t.Fatalf("should open the lineup's own place: %q programmes %v, %d physical tuners", res, an.esProgs, e.activePhysical())
+			}
+		})
+	}
+}
+
+// Every tuner busy: a control client that only collects tables (tvheadend's idle
+// guide scan) gives its tuner up to a viewer; one that is watching a programme
+// does not.
+func TestEPGScansGiveWayToViewers(t *testing.T) {
+	for _, evict := range []bool{true, false} {
+		t.Run(fmt.Sprintf("evict=%v", evict), func(t *testing.T) {
+			e := setup(t, []int{2}, 2, func(c *vdev.Config) { c.EvictScans, c.ScanGrace = evict, 300*time.Millisecond })
+			e.lu.Replace(append(append([]lineup.Entry{}, testLineup...), extraLineup...))
+			ctl := hdhrproto.NewControl(e.ctl)
+			defer ctl.Close()
+			rx, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rx.Close()
+			set := func(name, val string) {
+				t.Helper()
+				if _, err := ctl.Set(name, val, 0); err != nil {
+					t.Fatalf("set %s %s: %v", name, val, err)
+				}
+			}
+			tgt := "udp://" + rx.LocalAddr().String()
+			set("/tuner0/channel", "auto:177000000") // collecting tables only
+			set("/tuner0/filter", "0x0000 0x1ffb 0x1d00-0x1d0f")
+			set("/tuner0/target", tgt)
+			set("/tuner1/channel", "auto:473000000") // watching programme 1
+			set("/tuner1/filter", "0x0000 0x0100-0x0102")
+			set("/tuner1/target", tgt)
+			time.Sleep(700 * time.Millisecond) // past the grace period
+
+			c, rc := e.open("/auto/v36.1")
+			if !evict {
+				if c != nil {
+					c.close()
+					t.Fatal("served although every tuner is held")
+				}
+				if rc.StatusCode != 503 {
+					t.Fatalf("status %d, want 503", rc.StatusCode)
+				}
+				return
+			}
+			if c == nil {
+				t.Fatalf("the scan did not give way: %d %v", rc.StatusCode, rc.Header)
+			}
+			defer c.close()
+			if r := rc.Header.Get("X-HDHomeRun-Resource"); r != "tuner0" {
+				t.Fatalf("took %q, want the scanning tuner0", r)
+			}
+			if an := analyze(t, c.read(t, 188*100)); an.ccErrors != 0 || !an.esProgs[1] {
+				t.Fatalf("viewer got %v (cc=%d) pids=%v", an.esProgs, an.ccErrors, an.pids)
+			}
+			// the one watching a programme is left alone
+			d, rd := e.open("/auto/v14.3")
+			if d != nil {
+				d.close()
+				t.Fatalf("a watched tuner was taken: %v", rd.Header)
+			}
+			if rd.StatusCode != 503 {
+				t.Fatalf("status %d, want 503", rd.StatusCode)
+			}
+		})
 	}
 }

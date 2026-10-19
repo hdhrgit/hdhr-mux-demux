@@ -36,6 +36,10 @@
     "parallel": 3
   },
 
+  "auto_join_direct": true,
+  "auto_join_other_locations": true,
+  "evict_scans": true,
+  "stream_ttl": 3,
   "linger": "5s",
   "client_buffer_mb": 16,
   "idle_release": "60s"

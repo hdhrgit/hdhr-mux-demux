@@ -131,12 +131,12 @@ function programme(p, nowSec) {
     <div class="times"><span>${clock(p.start)}</span><span>${Math.max(0, Math.round((p.end - nowSec) / 60))} min left · ends ${clock(p.end)}</span></div></div>`;
 }
 function viewerHTML(v, nowSec) {
-  const raw = !/^\d/.test(v.channel) || /^ch/.test(v.channel);
+  const raw = !v.scan && (!/^\d/.test(v.channel) || /^ch/.test(v.channel));
   const queue = pct(v.queue);
   return `<div class="viewer">
-    <div class="v-top"><span class="chan ${raw ? 'raw' : ''}">${esc(v.channel)}</span><span class="v-name">${esc(v.name || 'Unlisted channel')}</span>
+    <div class="v-top"><span class="chan ${raw ? 'raw' : ''}">${esc(v.channel)}</span><span class="v-name">${esc(v.name || (v.scan ? '' : 'Unlisted channel'))}</span>
       <span class="v-client mono">${esc(v.client || 'unknown')}${v.control ? ' · control' : ''}</span></div>
-    ${programme(v.now, nowSec)}
+    ${v.scan ? '' : programme(v.now, nowSec)}
     ${v.next ? `<div class="times"><span>Next</span><span>${v.next.placeholder ? 'to be announced' : esc(v.next.title)} · ${clock(v.next.start)}</span></div>` : ''}
     <div class="v-meta"><span>watching <b>${dur(nowSec - v.since)}</b></span><span><b>${(v.bps / 1e6).toFixed(1)}</b> Mbps</span>
       <span class="buf">buffer <span class="meter ${queue > 60 ? 'bad' : queue > 25 ? 'warn' : ''}"><i style="width:${queue}%"></i></span> ${queue}%</span>
@@ -175,7 +175,8 @@ function updateActivity(a) {
     statCard('To viewers', mbps(S.txBps), 'Mbps', S.rxBps > 0 && S.txBps > S.rxBps * 1.1 ? `${(S.txBps / S.rxBps).toFixed(1)}× shared` : 'delivered') +
     statCard('Devices', S.physicalOnline, `/ ${S.physical}`, S.physicalOnline === S.physical ? 'all tuners online' : `${S.physical - S.physicalOnline} offline`));
 
-  const active = a.tuners.filter((t) => t.state !== 'idle');
+  // fewest viewers first (then by tuner): cards in a row are then about as tall as each other, with no gaps under the short ones
+  const active = a.tuners.filter((t) => t.state !== 'idle').sort((x, y) => (x.viewers || []).length - (y.viewers || []).length || x.index - y.index);
   const idle = a.tuners.filter((t) => t.state === 'idle');
   $('#n-active').textContent = active.length;
   patch($('#tuners'), active.length ? active.map((t) => tunerHTML(t, nowSec)).join('') :

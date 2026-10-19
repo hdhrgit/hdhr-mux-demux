@@ -63,6 +63,22 @@ type Config struct {
 	Guide Guide `json:"guide"`
 
 	Linger Duration `json:"linger"` // keep an unused physical tuner tuned this long (default 5s, -1s disables)
+	// AutoJoinDirect (default true): an /auto/ request for a channel a direct client
+	// (tvheadend over the control protocol, or a request for a tuner by number) is
+	// already receiving joins that tuner instead of taking another. Never the other
+	// way round: a direct client does not join an /auto/ stream.
+	AutoJoinDirect *bool `json:"auto_join_direct"`
+	// AutoJoinOtherLocations (default true): an /auto/ request for a channel that a
+	// session already open receives on another RF channel than the lineup lists (the
+	// same station via another antenna or feed) rides that session.
+	AutoJoinOtherLocations *bool `json:"auto_join_other_locations"`
+	// EvictScans (default true): an /auto/ request that finds every tuner busy takes one
+	// from a control client that only collects tables (tvheadend's idle guide scan).
+	EvictScans *bool `json:"evict_scans"`
+	// StreamTTL is the IP TTL of the video the multiplexer sends (HTTP streams, UDP/RTP
+	// targets), 3 by default like the devices, so that it does not travel beyond a
+	// couple of routers. Values above 8 are quietly reduced to 8; 0 means the default.
+	StreamTTL *int `json:"stream_ttl"`
 	// ClientBufferMB is the per-client queue for slow consumers (default 16).
 	ClientBufferMB int      `json:"client_buffer_mb"`
 	IdleRelease    Duration `json:"idle_release"` // free tuners left tuned without a viewer
@@ -104,6 +120,10 @@ type Lineup struct {
 	ScanTo        int               `json:"scan_to"`
 	ScanOnStart   bool              `json:"scan_on_start"` // scan at start-up (off by default: the devices' lineups are used)
 	Refresh       Duration          `json:"refresh"`       // re-read the devices' lineups this often (default 10m, -1s = never)
+	// ScanMode: "device" (default) hands a rescan to one idle device's own firmware
+	// scan, preferring one with ATSC 3.0 tuners; "own" runs the multiplexer's own scan
+	// on every free tuner of every device.
+	ScanMode string `json:"scan_mode"`
 	// ScanTuners limits tuners used per device by a scan (0 = every free one).
 	ScanTuners int `json:"scan_tuners_per_device"`
 }
@@ -196,9 +216,35 @@ func Load(path string) (*Config, error) {
 		t := true
 		c.Discoverable = &t
 	}
+	if c.AutoJoinDirect == nil {
+		t := true
+		c.AutoJoinDirect = &t
+	}
+	if c.AutoJoinOtherLocations == nil {
+		t := true
+		c.AutoJoinOtherLocations = &t
+	}
+	if c.EvictScans == nil {
+		t := true
+		c.EvictScans = &t
+	}
+	// The streams must not travel the internet at large (the devices push a lot of
+	// bandwidth, which would make a fine weapon): 3 unless set, never more than 8.
+	n := 3
+	if c.StreamTTL != nil && *c.StreamTTL > 0 {
+		n = min(*c.StreamTTL, 8)
+	}
+	c.StreamTTL = &n
 	applyEnv(c)
 	if c.StreamListen == "" {
 		c.StreamListen = ":5004"
+	}
+	switch c.Lineup.ScanMode {
+	case "":
+		c.Lineup.ScanMode = "device"
+	case "device", "own":
+	default:
+		return nil, fmt.Errorf("lineup.scan_mode %q: want device or own", c.Lineup.ScanMode)
 	}
 	if c.Linger == 0 {
 		c.Linger = Duration(5 * time.Second)

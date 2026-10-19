@@ -281,6 +281,13 @@ func (h *Hub) reclaim(accept func(*upstream.Lease) bool) bool {
 	return true
 }
 
+// ReleaseLingeringOn lets go of every stream on the device that has no viewers
+// (lingering for a quick return, or collecting the guide), freeing its tuners.
+func (h *Hub) ReleaseLingeringOn(deviceID uint32) {
+	for h.reclaim(func(l *upstream.Lease) bool { return l.Device().ID == deviceID }) {
+	}
+}
+
 // Streams reports every active stream.
 func (h *Hub) Streams() []Info {
 	h.mu.Lock()
@@ -346,9 +353,10 @@ type Sub struct {
 	once sync.Once
 
 	// guarded by st.fmu
-	mode    filterMode
-	pids    ts.PIDSet
-	program uint16
+	mode     filterMode
+	pids     ts.PIDSet
+	program  uint16
+	filterAt time.Time // when the filter was last set
 
 	filter atomic.Pointer[filterState]
 	active atomic.Bool // set once a consumer is attached; until then nothing is queued
@@ -417,8 +425,88 @@ func (s *Sub) SetFilter(set ts.PIDSet) {
 	s.st.fmu.Lock()
 	defer s.st.fmu.Unlock()
 	s.mode, s.pids, s.program = modePIDs, set, 0
+	s.filterAt = time.Now()
 	s.filter.Store(s.st.buildFilterLocked(s))
 	s.st.kickMask()
+}
+
+// WatchedPrograms says which programs of the stream the subscription is
+// receiving: the selected one, or, for a client that picks PIDs (tvheadend,
+// hdhomerun_config with "set filter"), the programs that are fully in its filter:
+// every audio, video and PCR PID of the programme. A programme only partly
+// included (one audio track, say) does not count, and neither do the PMT PIDs,
+// which clients pass to discover what is there. Ascending; empty when
+// everything is received (no filter) or nothing is complete.
+func (s *Sub) WatchedPrograms() []uint16 {
+	var out []uint16
+	for _, g := range s.WatchedProgramGroups() {
+		out = append(out, g...)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// SelectsPIDs reports whether the client picks PIDs itself (as opposed to
+// receiving everything or one programme).
+func (s *Sub) SelectsPIDs() bool {
+	s.st.fmu.Lock()
+	defer s.st.fmu.Unlock()
+	return s.mode == modePIDs
+}
+
+// WatchedProgramGroups is WatchedPrograms with the programmes that cannot be told
+// apart put together: some stations carry the same audio and video under two
+// programme numbers (9.1 and 54.2 on KQED), and a client that picks PIDs may be
+// watching either. Each group is ascending, the groups by their first programme.
+func (s *Sub) WatchedProgramGroups() [][]uint16 {
+	st := s.st
+	st.fmu.Lock()
+	defer st.fmu.Unlock()
+	switch s.mode {
+	case modeProgram:
+		return [][]uint16{{s.program}}
+	case modePIDs:
+		byPIDs := map[string][]uint16{}
+		for prog, pmt := range st.pmts {
+			var pids []int
+			all := true
+			for _, pid := range pmt.PIDs() {
+				if pid == st.programs[prog] {
+					continue
+				}
+				if !s.pids.Has(pid) {
+					all = false
+					break
+				}
+				pids = append(pids, int(pid))
+			}
+			if !all || len(pids) == 0 {
+				continue
+			}
+			sort.Ints(pids)
+			key := fmt.Sprint(compact(pids))
+			byPIDs[key] = append(byPIDs[key], prog)
+		}
+		var out [][]uint16
+		for _, g := range byPIDs {
+			sort.Slice(g, func(i, j int) bool { return g[i] < g[j] })
+			out = append(out, g)
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i][0] < out[j][0] })
+		return out
+	}
+	return nil
+}
+
+// compact removes repeats from a sorted slice.
+func compact(a []int) []int {
+	out := a[:0:0]
+	for i, v := range a {
+		if i == 0 || v != a[i-1] {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // Program returns the selected program (0 if none).
@@ -712,3 +800,66 @@ func (h *Hub) Pool() *upstream.Pool { return h.pool }
 
 // Buffered returns how many batches are queued for the consumer.
 func (s *Sub) Buffered() int { return len(s.C) }
+
+// ProgramChannel names a programme of the stream from the multiplex's own channel
+// table (PSIP), for streams whose programmes the lineup does not place on this
+// frequency: its guide number ("2.1") and short name.
+func (s *Sub) ProgramChannel(program uint16) (number, name string, ok bool) {
+	s.st.fmu.Lock()
+	defer s.st.fmu.Unlock()
+	ch, ok := s.st.vct[program]
+	if !ok || ch.GuideName == "" {
+		return "", "", false
+	}
+	return ch.GuideName, ch.Name, true
+}
+
+// AltCarrier is a stream that carries a channel at another place than the lineup
+// says: the multiplex's own channel table lists the guide number.
+type AltCarrier struct {
+	Tuner   int // global tuner number
+	Spec    chanmap.Spec
+	Program uint16 // the channel's programme on that multiplex
+}
+
+// CarryingChannel lists the busy streams on pinned tuners whose own channel table
+// (PSIP) carries the virtual channel number, wherever on the air that is. A
+// station can be received on more than one RF channel (a second antenna, a cable
+// feed, a translator); a viewer of it can ride a session that is already open
+// instead of taking a tuner. ATSC 3.0 services are not considered.
+func (h *Hub) CarryingChannel(number string) []AltCarrier {
+	h.mu.Lock()
+	var sts []*stream
+	for _, st := range h.streams {
+		if st.tuner >= 0 && !st.dead && !st.service && st.refs > 0 {
+			sts = append(sts, st)
+		}
+	}
+	h.mu.Unlock()
+	var out []AltCarrier
+	for _, st := range sts {
+		st.fmu.Lock()
+		for prog, ch := range st.vct {
+			if ch.GuideName != number {
+				continue
+			}
+			if _, inPAT := st.programs[prog]; inPAT {
+				out = append(out, AltCarrier{Tuner: st.tuner, Spec: st.spec, Program: prog})
+			}
+		}
+		st.fmu.Unlock()
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Tuner < out[j].Tuner })
+	return out
+}
+
+// FilterAge is how long ago the client last set its PID filter (zero when it
+// never has).
+func (s *Sub) FilterAge() time.Duration {
+	s.st.fmu.Lock()
+	defer s.st.fmu.Unlock()
+	if s.filterAt.IsZero() {
+		return 0
+	}
+	return time.Since(s.filterAt)
+}

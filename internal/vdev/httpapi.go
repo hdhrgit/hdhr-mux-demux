@@ -242,6 +242,8 @@ func (d *Device) handleStatus(w http.ResponseWriter, r *http.Request) {
 				if e, ok := d.lineup.Find(vch); ok {
 					s.VctName = e.GuideName
 				}
+			} else if num, name, ok := v.inferredChannel(sub, spec); ok {
+				s.VctNumber, s.VctName = num, name // a client that picks PIDs, not a channel
 			}
 			if i := strings.Index(tgt, "://"); i >= 0 {
 				host, _, _ := net.SplitHostPort(tgt[i+3:])
@@ -326,16 +328,22 @@ func (d *Device) handleTunersHTML(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "<tr><td>tuner%d<td>%s<td>%s<td>%d<td>", rw.v.idx, html.EscapeString(rw.phys),
 				html.EscapeString(rw.v.statusString()), len(rw.viewers))
 			for _, vw := range rw.viewers {
-				name := ""
+				name, label := "", vw.Label
 				if e, ok := d.lineup.Find(vw.Label); ok {
 					name = " " + e.GuideName
+				}
+				if len(vw.Alt) > 1 { // a guess that cannot tell these apart
+					label = strings.Join(vw.Alt, " / ")
+				}
+				if vw.Scan {
+					label = "EPG scan (" + label + ")"
 				}
 				kind := ""
 				if vw.Control {
 					kind = " (control)"
 				}
 				fmt.Fprintf(w, "%s%s &mdash; %s%s &mdash; %s &mdash; %.1f Mbps &mdash; buffer %d%%, dropped %d<br>",
-					html.EscapeString(vw.Label), html.EscapeString(name), html.EscapeString(vw.Client), kind,
+					html.EscapeString(label), html.EscapeString(name), html.EscapeString(vw.Client), kind,
 					time.Since(vw.Since).Round(time.Second), float64(vw.BPS)/1e6, vw.Queue, vw.Drops)
 			}
 		}
@@ -436,7 +444,7 @@ func httpErr(w http.ResponseWriter, code int, hdhr string) {
 // reuses any tuner already carrying the stream, and only then opens a new one.
 func (d *Device) openStream(ctx context.Context, which string, rq streamReq) (*VTuner, *hub.Sub, error) {
 	start := func(v *VTuner) (*VTuner, *hub.Sub, error) {
-		sub, err := v.startHTTP(ctx, rq.spec, rq.program, rq.vchannel, rq.service)
+		sub, err := v.startHTTP(ctx, rq.spec, rq.program, rq.vchannel, rq.service, which == "auto")
 		return v, sub, err
 	}
 	if which == "auto" {
@@ -453,11 +461,9 @@ func (d *Device) openStream(ctx context.Context, which string, rq streamReq) (*V
 	if v.tryReserve() {
 		return start(v)
 	}
-	sub, err := v.joinHTTP(ctx, rq.spec, rq.program, rq.service, true)
-	if err != nil {
-		return nil, nil, err
-	}
-	return v, sub, nil
+	// A tuner asked for by number is that client's, as on a real device: if it is
+	// busy, even with the same channel, the answer is 804. (Sharing is for /auto/.)
+	return nil, nil, ErrBusy
 }
 
 func (d *Device) openAuto(ctx context.Context, rq streamReq, start func(*VTuner) (*VTuner, *hub.Sub, error)) (*VTuner, *hub.Sub, error) {
@@ -478,6 +484,19 @@ func (d *Device) openAuto(ctx context.Context, rq streamReq, start func(*VTuner)
 				}
 			} else if sub, err := v.joinHTTP(ctx, rq.spec, rq.program, rq.service, false); err == nil {
 				return v, sub, nil
+			}
+		}
+	}
+
+	// 1b. The station may be received elsewhere than the lineup says (another
+	// antenna or feed): a session that already carries it is as good.
+	if d.cfg.AutoJoinOtherLocations && rq.vchannel != "" && !rq.service {
+		for _, c := range d.hub.CarryingChannel(rq.vchannel) {
+			if c.Spec.Frequency == rq.spec.Frequency || c.Tuner >= len(d.tuners) {
+				continue // the lineup's own place was tried above
+			}
+			if sub, err := d.tuners[c.Tuner].joinHTTP(ctx, c.Spec, c.Program, false, false); err == nil {
+				return d.tuners[c.Tuner], sub, nil
 			}
 		}
 	}
@@ -533,6 +552,49 @@ func (d *Device) openAuto(ctx context.Context, rq streamReq, start func(*VTuner)
 		default:
 			return nil, nil, err
 		}
+	}
+	if d.cfg.EvictScans && !errors.Is(lastErr, upstream.ErrNoTuner) {
+		if v, sub, err := d.evictScanAndStart(rq, start); err == nil {
+			return v, sub, nil
+		}
+	}
+	return nil, nil, lastErr
+}
+
+// evictScanAndStart is the last resort of /auto/ when every tuner is busy: a tuner
+// held by a control client that only collects tables (tvheadend's idle guide
+// scan) is given up for the viewer. Real viewing, direct or not, is never touched.
+func (d *Device) evictScanAndStart(rq streamReq, start func(*VTuner) (*VTuner, *hub.Sub, error)) (*VTuner, *hub.Sub, error) {
+	pool := d.hub.Pool()
+	type cand struct {
+		v     *VTuner
+		score int
+	}
+	var cands []cand
+	for _, v := range d.tuners {
+		if !v.pinned() || !v.evictableScan() {
+			continue
+		}
+		class, ok := pool.Suitability(v.idx, rq.service || d.hub.IsService(rq.spec.Frequency))
+		if !ok {
+			continue
+		}
+		cands = append(cands, cand{v, class})
+	}
+	sort.SliceStable(cands, func(i, j int) bool { return cands[i].score < cands[j].score })
+	lastErr := errBusyAll
+	for _, c := range cands {
+		if !c.v.evictScan() || !c.v.tryReserve() {
+			continue
+		}
+		v, sub, err := start(c.v)
+		if err == nil {
+			return v, sub, nil
+		}
+		if !errors.Is(err, upstream.ErrTunerBusy) && !errors.Is(err, upstream.ErrTunerUnsuitable) {
+			return nil, nil, err
+		}
+		lastErr = err
 	}
 	return nil, nil, lastErr
 }
@@ -609,6 +671,9 @@ func (d *Device) handleStream(w http.ResponseWriter, r *http.Request) {
 	// Tells the client which tuner it got (real devices do the same); Channels
 	// uses it to poll that tuner's /tunerN/debug for its signal display.
 	h["X-HDHomeRun-Resource"] = []string{fmt.Sprintf("tuner%d", v.idx)}
+	if c, _ := r.Context().Value(connKey{}).(net.Conn); c != nil {
+		setTTL(c, d.cfg.StreamTTL)
+	}
 	w.WriteHeader(http.StatusOK)
 	countStreamResponse(http.StatusOK, "")
 	rc := http.NewResponseController(w)

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -26,6 +27,17 @@ func TestDefaults(t *testing.T) {
 	c := load(t, "")
 	if !*c.Upstream.Discover || !*c.Discoverable || !*c.SSDP {
 		t.Fatal("discovery, discoverability and SSDP should default to on")
+	}
+}
+
+func TestStreamTTL(t *testing.T) {
+	if c := load(t, ""); *c.StreamTTL != 3 || !*c.AutoJoinDirect {
+		t.Fatalf("stream_ttl %d, auto_join_direct %v: want 3 and true", *c.StreamTTL, *c.AutoJoinDirect)
+	}
+	for in, want := range map[int]int{0: 3, 1: 1, 5: 5, 8: 8, 9: 8, 255: 8, 100000: 8} {
+		if c := load(t, fmt.Sprintf(`{"stream_ttl": %d}`, in)); *c.StreamTTL != want {
+			t.Errorf("stream_ttl %d became %d, want %d", in, *c.StreamTTL, want)
+		}
 	}
 }
 

@@ -48,6 +48,8 @@ type Config struct {
 	Bitrate    int    // bits per second per active tuner (default 4 Mbps)
 	ChannelMap string // default us-bcast
 	Model      string // /sys/model, default hdhomerun5_atsc3
+	// ScanDuration is how long a scan started over HTTP takes (default 800 ms).
+	ScanDuration time.Duration
 }
 
 type Device struct {
@@ -58,7 +60,13 @@ type Device struct {
 	http   net.Listener
 	web    net.Listener
 	hidden map[string]bool
-	srv    *http.Server
+	// firmware scan simulation (http.go)
+	scanning     bool
+	scanStarted  time.Time
+	scanRequests int
+	scanAborts   int
+	scanSource   string
+	srv          *http.Server
 
 	mu       sync.Mutex
 	tuners   []*tuner

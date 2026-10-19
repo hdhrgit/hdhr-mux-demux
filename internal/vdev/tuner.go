@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"strings"
 	"sync"
@@ -50,9 +51,16 @@ type VTuner struct {
 	httpSubs   []*hub.Sub
 	viewers    map[*hub.Sub]viewerMeta // who is behind each HTTP viewer
 	httpOpened bool
-	lockkey    uint32
-	lockIP     string
-	lastUse    time.Time
+	// autoOwned: the stream was opened by an /auto/ request, so other /auto/
+	// requests may join it. A tuner somebody asked for directly (by number, or
+	// over the control protocol) belongs to them, as on a real device.
+	autoOwned bool
+	lockkey   uint32
+	lockIP    string
+	lastUse   time.Time
+	// ctlSince is when the control client began receiving (its sender started); lastUse
+	// moves with every command and every joining viewer, so it cannot say that.
+	ctlSince time.Time
 
 	physStatus string // cached status of the physical counterpart
 	physOK     bool
@@ -171,7 +179,7 @@ func (v *VTuner) releaseAll(clearTarget bool) {
 	v.stopStream()
 	v.mu.Lock()
 	v.tuned, v.chanStr, v.vchannel = false, "none", ""
-	v.program, v.explicit, v.httpUse = 0, false, false
+	v.program, v.explicit, v.httpUse, v.autoOwned = 0, false, false, false
 	v.httpSubs, v.httpOpened, v.viewers = nil, false, nil
 	if clearTarget {
 		v.targetStr = "none"
@@ -189,7 +197,7 @@ func (v *VTuner) maybeStartSender() error {
 	if err != nil {
 		return err
 	}
-	v.snd = snd
+	v.snd, v.ctlSince = snd, time.Now()
 	return nil
 }
 
@@ -211,7 +219,9 @@ func (v *VTuner) tryReserve() bool {
 }
 
 // startHTTP (after tryReserve) tunes and selects the program.
-func (v *VTuner) startHTTP(ctx context.Context, spec chanmap.Spec, program uint16, vchannel string, service bool) (*hub.Sub, error) {
+// startHTTP tunes the tuner for an HTTP viewer; auto says the request came to
+// /auto/ (others like it may then join), not for this tuner by number.
+func (v *VTuner) startHTTP(ctx context.Context, spec chanmap.Spec, program uint16, vchannel string, service, auto bool) (*hub.Sub, error) {
 	v.op.Lock()
 	defer v.op.Unlock()
 	if err := v.tuneLocked(ctx, spec, hub.Options{Program: program, Service: service}); err != nil {
@@ -224,6 +234,7 @@ func (v *VTuner) startHTTP(ctx context.Context, spec chanmap.Spec, program uint1
 	v.applyFilterLocked()
 	sub := v.sub
 	v.httpSubs, v.httpOpened = []*hub.Sub{sub}, true
+	v.autoOwned = auto
 	v.mu.Unlock()
 	sub.Enable()
 	return sub, nil
@@ -242,7 +253,11 @@ func (v *VTuner) joinHTTP(ctx context.Context, spec chanmap.Spec, program uint16
 	}
 	o := v.opts(program, service)
 	v.mu.Lock()
-	ok := v.tuned && v.sub != nil && !v.lockedLocked() && v.sub.Key() == v.d.hub.KeyFor(spec, o)
+	// A tuner somebody asked for directly (tvheadend over the control protocol, or
+	// by number) can be joined too when AutoJoinDirect is on: a viewer does not
+	// retune the tuner, so its owner's lock does not matter.
+	shareable := v.autoOwned && !v.lockedLocked() || v.d.cfg.AutoJoinDirect
+	ok := v.tuned && v.sub != nil && shareable && v.sub.Key() == v.d.hub.KeyFor(spec, o)
 	v.mu.Unlock()
 	v.op.Unlock()
 	if !ok {
@@ -287,6 +302,16 @@ type ViewerRow struct {
 	Queue   int // % of the client buffer in use
 	Drops   uint64
 	Control bool // a control-protocol client (target=...) rather than HTTP
+	// Alt lists the channels the client may be watching when they cannot be told
+	// apart (the same audio and video under two numbers); Label is the first.
+	// Inferred: the channel is a guess from the PIDs the client asked for.
+	Alt      []string
+	Inferred bool
+	// Scan: the client picks PIDs that complete no programme, so it is collecting
+	// tables (a guide or channel scan), not watching anything; Freq is the RF
+	// channel it is on.
+	Scan bool
+	Freq uint64
 }
 
 // viewerRows lists the clients currently attached to the tuner.
@@ -302,7 +327,10 @@ func (v *VTuner) viewerRows() []ViewerRow {
 	}
 	sub, tgt, vch, spec := v.sub, v.targetStr, v.vchannel, v.spec
 	controlled := v.snd != nil
-	since := v.lastUse
+	since := v.ctlSince
+	if since.IsZero() {
+		since = v.lastUse
+	}
 	v.mu.Unlock()
 
 	var rows []ViewerRow
@@ -319,16 +347,33 @@ func (v *VTuner) viewerRows() []ViewerRow {
 		if i := strings.Index(tgt, "://"); i >= 0 {
 			host, _, _ = net.SplitHostPort(tgt[i+3:])
 		}
-		label := vch
-		if label == "" {
-			label = spec.String()
-		}
 		bps, _ := sub.Rate()
 		q := 0
 		if c := cap(sub.C); c > 0 {
 			q = sub.Buffered() * 100 / c
 		}
-		rows = append(rows, ViewerRow{Client: host, Label: label, Since: since, BPS: bps, Queue: q, Drops: sub.Drops(), Control: true})
+		var groups [][]string
+		if vch == "" {
+			// A client that selects PIDs rather than a channel (tvheadend): a guess,
+			// the programmes its filter includes completely, those that cannot be told
+			// apart together.
+			groups = v.inferredChannels(sub, spec)
+		}
+		if len(groups) == 0 {
+			label := vch
+			if label == "" {
+				label = spec.String()
+			}
+			scan := vch == "" && sub.SelectsPIDs()
+			rows = append(rows, ViewerRow{Client: host, Label: label, Since: since, BPS: bps, Queue: q, Drops: sub.Drops(), Control: true, Scan: scan, Freq: spec.Frequency})
+		}
+		for i, g := range groups {
+			row := ViewerRow{Client: host, Label: g[0], Alt: g, Inferred: true, Since: since, Queue: q, Drops: sub.Drops(), Control: true}
+			if i == 0 {
+				row.BPS = bps // one stream: counted once
+			}
+			rows = append(rows, row)
+		}
 	}
 	return rows
 }
@@ -362,14 +407,14 @@ func (v *VTuner) endHTTP(sub *hub.Sub) {
 // reap releases tuners left tuned with nobody using them.
 func (v *VTuner) reap(idle time.Duration) {
 	v.mu.Lock()
-	stale := v.tuned && v.snd == nil && !v.httpUse && time.Since(v.lastUse) > idle
+	stale := v.tuned && v.snd == nil && !v.httpUse && len(v.httpSubs) == 0 && time.Since(v.lastUse) > idle
 	v.mu.Unlock()
 	if !stale || !v.op.TryLock() {
 		return
 	}
 	defer v.op.Unlock()
 	v.mu.Lock()
-	stale = v.tuned && v.snd == nil && !v.httpUse && time.Since(v.lastUse) > idle
+	stale = v.tuned && v.snd == nil && !v.httpUse && len(v.httpSubs) == 0 && time.Since(v.lastUse) > idle
 	v.mu.Unlock()
 	if stale {
 		v.releaseAll(false)
@@ -574,9 +619,24 @@ func (v *VTuner) set(remote net.IP, name, value string, key *uint32) (string, er
 		if err != nil {
 			return "", errors.New("ERROR: invalid channel")
 		}
+		v.mu.Lock()
+		watchers, owner := len(v.httpSubs), v.firstViewerLocked()
+		v.mu.Unlock()
 		if !ok {
+			// Channels DVR tells the tuner to let go (channel none, target none)
+			// each time one of its streams ends. HTTP viewers can share this tuner,
+			// and the others must keep their stream: a clear from one of them (or from
+			// anybody) does not end the viewing of the rest.
+			if watchers > 0 {
+				v.adoptViewers()
+				return value, nil
+			}
 			v.stopStreamKeepTarget()
 			return value, nil
+		}
+		if watchers > 0 && !v.carries(spec) {
+			// an HTTP stream holds the tuner, as on a real device
+			return "", fmt.Errorf("ERROR: resource locked by %s", owner)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -622,7 +682,7 @@ func (v *VTuner) set(remote net.IP, name, value string, key *uint32) (string, er
 			}
 		} else {
 			v.mu.Lock()
-			v.applyFilterLocked()
+			v.ctlFilterLocked()
 			v.mu.Unlock()
 		}
 	case "filter":
@@ -632,7 +692,7 @@ func (v *VTuner) set(remote net.IP, name, value string, key *uint32) (string, er
 		}
 		v.mu.Lock()
 		v.pids, v.explicit, v.program = set, true, 0
-		v.applyFilterLocked()
+		v.ctlFilterLocked()
 		v.mu.Unlock()
 	case "target":
 		return v.setTarget(value)
@@ -682,6 +742,104 @@ func (v *VTuner) channelmapNow() string {
 	return v.channelmap
 }
 
+// inferredChannels guesses the channels a client that selects PIDs rather than a
+// channel (tvheadend) is watching: the programmes its filter includes completely,
+// as groups of guide numbers (programmes with the same audio and video are one
+// group: there is no telling which one it is).
+func (v *VTuner) inferredChannels(sub *hub.Sub, spec chanmap.Spec) [][]string {
+	if sub == nil {
+		return nil
+	}
+	var out [][]string
+	for _, g := range sub.WatchedProgramGroups() {
+		var nums []string
+		for _, p := range g {
+			// the lineup says where its channels are; a device that receives a station
+			// on another frequency (another antenna) is not in it, then the multiplex's
+			// own channel table names the programme, and failing that its number.
+			if num, _, ok := v.d.lineup.ProgramName(spec.Frequency, p); ok {
+				nums = append(nums, num)
+			} else if num, _, ok := sub.ProgramChannel(p); ok {
+				nums = append(nums, num)
+			} else {
+				nums = append(nums, fmt.Sprintf("program %d", p))
+			}
+		}
+		if len(nums) > 0 {
+			out = append(out, nums)
+		}
+	}
+	return out
+}
+
+// inferredChannel is the first of them, with its name.
+func (v *VTuner) inferredChannel(sub *hub.Sub, spec chanmap.Spec) (num, name string, ok bool) {
+	if sub == nil {
+		return "", "", false
+	}
+	for _, g := range v.inferredChannels(sub, spec) {
+		if e, ok := v.d.lineup.Find(g[0]); ok {
+			return g[0], e.GuideName, true
+		}
+	}
+	return "", "", false
+}
+
+// firstViewerLocked is the address of the oldest HTTP viewer (the one that holds
+// the tuner, for the lock message). v.mu must be held.
+func (v *VTuner) firstViewerLocked() string {
+	oldest, who := time.Time{}, "another client"
+	for _, m := range v.viewers {
+		if oldest.IsZero() || m.since.Before(oldest) {
+			oldest, who = m.since, m.client
+		}
+	}
+	return who
+}
+
+// carries reports whether the tuner is already tuned to spec's RF channel.
+func (v *VTuner) carries(spec chanmap.Spec) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.tuned && v.spec.Key() == spec.Key()
+}
+
+// adoptViewers (op held) is what a control client letting go of a tuner that HTTP
+// viewers joined means: the viewers keep it. Its own subscription and sender go,
+// the first viewer's stream represents the tuner, and the tuner is released with
+// the last viewer, as if they had opened it.
+func (v *VTuner) adoptViewers() {
+	v.mu.Lock()
+	if len(v.httpSubs) == 0 || v.sub == v.httpSubs[0] || v.httpOpened {
+		v.mu.Unlock()
+		return
+	}
+	old, snd := v.sub, v.snd
+	v.sub, v.snd = v.httpSubs[0], nil
+	v.targetStr = "none" // a sender started later would take the viewer's data from it
+	v.httpOpened, v.httpUse, v.autoOwned = true, true, true
+	v.program, v.explicit, v.vchannel = 0, false, ""
+	v.lockkey, v.lockIP = 0, ""
+	v.mu.Unlock()
+	if snd != nil {
+		snd.stop()
+	}
+	if old != nil {
+		old.Close()
+	}
+}
+
+// ctlFilterLocked applies a control client's filter to the tuner's own
+// subscription, but never to a viewer's stream.
+func (v *VTuner) ctlFilterLocked() {
+	for _, s := range v.httpSubs {
+		if s == v.sub {
+			return
+		}
+	}
+	v.applyFilterLocked()
+}
+
 // stopStreamKeepTarget implements "set channel none".
 func (v *VTuner) stopStreamKeepTarget() {
 	v.releaseAll(false)
@@ -699,6 +857,7 @@ func (v *VTuner) setTarget(value string) (string, error) {
 		return value, nil
 	}
 	if _, err := parseTarget(value); err != nil {
+		log.Printf("tuner%d: refusing target %q: %v", v.idx, value, err)
 		return "", errors.New("ERROR: invalid set value")
 	}
 	v.mu.Lock()
@@ -818,6 +977,9 @@ func parseTarget(s string) (target, error) {
 	if err != nil || a.Port == 0 {
 		return t, fmt.Errorf("bad target %q", s)
 	}
+	if !privateTarget(a.IP) {
+		return t, fmt.Errorf("target %s is not on a private IPv4 network", a.IP)
+	}
 	t.addr = a
 	return t, nil
 }
@@ -831,6 +993,7 @@ func newSender(v *VTuner, sub *hub.Sub, tgt string) (*sender, error) {
 	if err != nil {
 		return nil, err
 	}
+	setTTL(conn, v.d.cfg.StreamTTL)
 	s := &sender{v: v, conn: conn, rtp: t.rtp, quit: make(chan struct{}), done: make(chan struct{})}
 	sub.Enable()
 	go s.run(sub)
@@ -911,4 +1074,56 @@ func (v *VTuner) targetGone(s *sender) {
 	if cur {
 		v.releaseAll(true)
 	}
+}
+
+// scanGrace is how long a control client's filter must have completed no
+// programme before the client counts as scanning (see Config.ScanGrace).
+func (d *Device) scanGrace() time.Duration {
+	if d.cfg.ScanGrace > 0 {
+		return d.cfg.ScanGrace
+	}
+	return 10 * time.Second
+}
+
+// scanningLocked reports whether the tuner is held by a control client that is
+// only collecting tables: its PID filter has completed no programme for a while.
+// Nobody else may be on the tuner. v.mu must be held.
+func (v *VTuner) scanningLocked() bool {
+	sub := v.sub
+	return v.tuned && v.snd != nil && sub != nil && len(v.httpSubs) == 0 && v.vchannel == "" &&
+		sub.SelectsPIDs() && sub.FilterAge() >= v.d.scanGrace() && len(sub.WatchedProgramGroups()) == 0
+}
+
+func (v *VTuner) evictableScan() bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.scanningLocked()
+}
+
+// evictScan takes the tuner from a control client that is only scanning, so that
+// a viewer can have it: the stream and the lock go, the client finds its data
+// stopped and its lock lost, as when a real tuner is taken over. It reports
+// whether the tuner is free to be reserved.
+func (v *VTuner) evictScan() bool {
+	if !v.op.TryLock() {
+		return false
+	}
+	defer v.op.Unlock()
+	v.mu.Lock()
+	if !v.scanningLocked() {
+		v.mu.Unlock()
+		return false
+	}
+	freq, client := v.spec.Frequency, ""
+	if i := strings.Index(v.targetStr, "://"); i >= 0 {
+		client, _, _ = net.SplitHostPort(v.targetStr[i+3:])
+	}
+	v.mu.Unlock()
+	// the target goes too: a sender left behind would start again on the viewer's stream
+	v.releaseAll(true)
+	v.mu.Lock()
+	v.lockkey, v.lockIP = 0, ""
+	v.mu.Unlock()
+	log.Printf("tuner%d: guide scan of %d Hz by %s given up for a viewer", v.idx, freq, client)
+	return true
 }

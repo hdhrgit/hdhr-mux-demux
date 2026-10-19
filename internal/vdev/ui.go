@@ -98,6 +98,12 @@ type uiViewer struct {
 	Queue   int          `json:"queue"` // % of the client buffer in use
 	Drops   uint64       `json:"drops"`
 	Control bool         `json:"control,omitempty"` // a control-protocol client rather than HTTP
+	// Inferred: a guess from the PIDs the client asked for; Alt are all the
+	// channels it may be watching when they cannot be told apart.
+	Inferred bool `json:"inferred,omitempty"`
+	// Scan: collecting tables (an EPG or channel scan), not watching a channel.
+	Scan bool     `json:"scan,omitempty"`
+	Alt  []string `json:"alt,omitempty"`
 }
 
 type uiTuner struct {
@@ -247,6 +253,29 @@ func (d *Device) activity() uiActivity {
 			if e, ok := d.entryFor(r.Label); ok {
 				uv.Name, gn = e.GuideName, e.GuideNumber
 				uv.Channel = e.GuideNumber
+			}
+			if r.Inferred {
+				uv.Inferred = true
+				if len(r.Alt) > 1 {
+					// no telling which of them: say all, and the names once each
+					uv.Alt = r.Alt
+					uv.Channel = strings.Join(r.Alt, " / ")
+					var names []string
+					seen := map[string]bool{}
+					for _, n := range r.Alt {
+						if e, ok := d.entryFor(n); ok && !seen[e.GuideName] {
+							seen[e.GuideName] = true
+							names = append(names, e.GuideName)
+						}
+					}
+					uv.Name = strings.Join(names, " / ")
+				}
+			}
+			if r.Scan {
+				uv.Scan, uv.Channel, uv.Name = true, "EPG scan", ""
+				if r.Freq != 0 {
+					uv.Name = fmt.Sprintf("%d MHz", r.Freq/1000000)
+				}
 			}
 			uv.Now, uv.Next = d.nowNext(gn, now)
 			t.TxBPS += r.BPS

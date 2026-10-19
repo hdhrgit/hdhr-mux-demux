@@ -68,6 +68,27 @@ type Config struct {
 	// NoSSDP4 and NoSSDP6 switch SSDP off for one IP family (announcements
 	// and search answers): both families are on by default, as on real devices.
 	NoSSDP4, NoSSDP6 bool
+	// ScanMode "device" hands a rescan to one idle device's own firmware scan;
+	// anything else (the default here) runs the multiplexer's own scan on every
+	// free tuner.
+	ScanMode string
+	// AutoJoinDirect lets an /auto/ request join a tuner a direct client already
+	// holds on the same channel.
+	AutoJoinDirect bool
+	// AutoJoinOtherLocations lets an /auto/ request ride a session that carries the
+	// channel on another RF channel than the lineup lists.
+	AutoJoinOtherLocations bool
+	// EvictScans lets an /auto/ request that finds every tuner busy take one from a
+	// control client that is only collecting tables (a guide or channel scan).
+	EvictScans bool
+	// ScanGrace is how long a control client has to hold a filter that completes no
+	// programme before it counts as scanning (default 10 s): a client about to
+	// watch sets such a filter too, for a moment, while it reads the PMTs.
+	ScanGrace time.Duration
+	// StreamTTL is the IP TTL of the streams sent to clients (0 = 3; never more than 8).
+	StreamTTL int
+	// ScanPollInterval, if set, replaces the interval at which a device scan is polled.
+	ScanPollInterval time.Duration
 	// NoATSC3SSDP leaves the ATSC 3.0 primary device out of the announcements.
 	NoATSC3SSDP bool
 	// Hidden stops the multiplexer advertising itself: wildcard UDP discovery
@@ -86,6 +107,14 @@ type Config struct {
 	ScanInfoWait time.Duration
 	// LockTimeout expires an idle lockkey.
 	LockTimeout time.Duration
+}
+
+// ScanPoll is how often a device's scan is asked for its progress.
+func (c *Config) ScanPoll() time.Duration {
+	if c.ScanPollInterval > 0 {
+		return c.ScanPollInterval
+	}
+	return 2 * time.Second
 }
 
 func (c *Config) defaults() {
@@ -207,7 +236,8 @@ func (d *Device) Start() error {
 			inner.ServeHTTP(w, r)
 		})
 	}
-	d.httpSrv = &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
+	d.httpSrv = &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second,
+		ConnContext: func(ctx context.Context, c net.Conn) context.Context { return withConn(ctx, c) }}
 	d.wg.Add(3)
 	go func() { defer d.wg.Done(); d.httpSrv.Serve(d.httpLn) }()
 	if d.streamLn != nil {
@@ -507,6 +537,9 @@ func (d *Device) lineupLoop() {
 // StartScan begins a background channel scan for source (default source if
 // empty). It fails if one is already running.
 func (d *Device) StartScan(source string) error {
+	if d.cfg.ScanMode == "device" {
+		return d.startDeviceScan(source)
+	}
 	if source == "" {
 		source = d.source
 	}

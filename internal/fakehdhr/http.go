@@ -51,6 +51,52 @@ func (d *Device) serveLineup(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(out)
 }
 
+// A scan started with POST /lineup.post?scan=start runs for ScanDuration (default
+// 800 ms), then reveals the channels hidden with HideFromLineup, as a firmware
+// scan finding new channels would.
+func (d *Device) serveLineupPost(w http.ResponseWriter, r *http.Request) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	switch r.URL.Query().Get("scan") {
+	case "start":
+		d.scanRequests++
+		d.scanSource = r.URL.Query().Get("source")
+		d.scanStarted = time.Now()
+		d.scanning = true
+	case "abort":
+		d.scanning = false
+		d.scanAborts++
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (d *Device) serveLineupStatus(w http.ResponseWriter, r *http.Request) {
+	d.mu.Lock()
+	dur := d.cfg.ScanDuration
+	if dur == 0 {
+		dur = 800 * time.Millisecond
+	}
+	if d.scanning && time.Since(d.scanStarted) >= dur {
+		d.scanning = false
+		d.hidden = map[string]bool{} // the scan found them
+	}
+	scanning, pct := d.scanning, int(time.Since(d.scanStarted)*100/dur)
+	d.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	if scanning {
+		fmt.Fprintf(w, `{"ScanInProgress":1,"Progress":%d,"Found":3}`, pct)
+		return
+	}
+	fmt.Fprint(w, `{"ScanInProgress":0,"ScanPossible":1,"Source":"Antenna","SourceList":["Antenna","Cable"]}`)
+}
+
+// ScanRequests counts the scans started on the device and reports the source of the last.
+func (d *Device) ScanRequests() (n int, source string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.scanRequests, d.scanSource
+}
+
 func (d *Device) startHTTP() error {
 	web, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -59,6 +105,8 @@ func (d *Device) startHTTP() error {
 	d.web = web
 	wm := http.NewServeMux()
 	wm.HandleFunc("GET /lineup.json", d.serveLineup)
+	wm.HandleFunc("POST /lineup.post", d.serveLineupPost)
+	wm.HandleFunc("GET /lineup_status.json", d.serveLineupStatus)
 	go http.Serve(web, wm)
 
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")

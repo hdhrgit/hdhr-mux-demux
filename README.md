@@ -25,10 +25,11 @@ tuner between every client watching the same RF channel**.
 `GET http://MUX:5004/auto/v2.4`
 
 1. The lineup (built by the scan) says 2.4 is program 6 on 545 MHz, ATSC 1.0.
-2. `/auto/` first looks for a tuner already carrying the **same RF channel** (or ATSC 3.0
-   service) and joins it with its own program filter; only otherwise does it open a free
-   tuner. `/tunerN/...` asks for that exact tuner (joining if it carries the same stream,
-   else `804 Tuner In Use`). `805 All Tuners In Use` if nothing can serve the request.
+2. `/auto/` first looks for a tuner an earlier `/auto/` request opened on the **same RF channel**
+   (or ATSC 3.0 service) and joins it with its own program filter; only otherwise does it open a
+   free tuner. `/tunerN/...` asks for that exact tuner and gets it, or `804 Tuner In Use` if it is busy,
+   even with the same channel (as on a real device). `805 All Tuners In Use` if nothing can serve
+   an `/auto/` request.
 3. If no tuner carries 545 MHz yet, the best free one is chosen and opened with
    `GET http://DEVICE:5004/tunerM/ch545000000` (the whole multiplex).
 4. The viewer's filter keeps PAT (rewritten to just program 6), PMT, PCR and
@@ -69,8 +70,19 @@ over the LAN instead of 19; a lingering stream nobody watches drops to the table
   tuners are 0-3, device 1's are 4-7, and so on.
 * **Strict 1:1.** Virtual tuner *N* is physical tuner *N*: whatever it streams
   comes from that tuner, and status queries for it (control protocol or
-  `status.json`) describe it. Several viewers of the same RF channel share one
+  `status.json`) describe it. Several `/auto/` viewers of the same RF channel share one
   virtual tuner (each with its own program filter); that is how tuners are saved.
+* **Direct requests are trusted.** A client that asks for a tuner by number (HTTP `/tunerN/`, or the
+  control protocol: tvheadend, `hdhomerun_config`, which lock it and may receive over UDP/RTP) gets
+  that tuner and keeps it, as on a real HomeRun; nobody else is attached to it. A direct client
+  never joins anybody: it is refused (`804`, or "resource locked") when its tuner is busy.
+  `/auto/` requests (Channels DVR, the playlist, DLNA) join each other, and with
+  **`auto_join_direct`** (default `true`) they also join a tuner a direct client already holds on
+  the same RF channel instead of taking another one. The viewer gets its own programme whatever
+  the direct client's PID filter does, and keeps the tuner if that client lets go of it (then it is
+  released with the last viewer). While `/auto/` viewers are on it the direct client cannot retune
+  it (it is told the resource is locked), as on a real device. Set it to `false` to keep direct
+  clients' tuners strictly to themselves.
 * **`/auto/` maximises free tuners.** It first reuses a tuner that already carries
   the channel (busy, or still lingering on it); only if there is none does it open
   a new one, choosing the one that hurts future requests least:
@@ -82,8 +94,7 @@ over the LAN instead of 19; a lingering stream nobody watches drops to the table
     lingering stream come last. A tuner another application is using is never
     taken: `/tunerN/` for it answers `804` and its status shows what the other
     application is doing.
-* `/tunerN/` asks for exactly that tuner. If it is busy but already carries the
-  same stream, the request joins it; otherwise `804 Tuner In Use`.
+* `/tunerN/` asks for exactly that tuner: it gets it or `804 Tuner In Use`.
 * With `linger` (default 5 s) a tuner stays tuned after its last viewer leaves
   so flipping back is instant, but it is **given up immediately** when anyone
   needs a tuner, so channel flipping never runs out.
@@ -194,15 +205,22 @@ is not decoded; the broadcasts usually cover a day or two ahead.
 
 ### Scan (explicit only)
 
-`POST /lineup.post?scan=start` (what a client's "rescan" does) or
-`set /lineup/scan start` runs a scan that teaches the locations of channels (and adds
-any the devices do not list) and re-reads the devices' lineups. It does not trigger the
-firmware's own scan, which takes all of a device's tuners and cuts running streams. It uses
-**every free tuner of every device** at once, each taking the next unscanned RF channel; it
-never evicts a viewer, and `lineup.scan_tuners_per_device` caps it. Tuners that cannot do
-ATSC 3.0 hand channels that show signal but do not lock to the capable ones. Tuners held by
-the scan refuse streams at once (`804`) and `/auto/` goes around them. `scan_on_start`
-is off by default.
+`POST /lineup.post?scan=start` (what a client's "rescan" does; Channels DVR does it about
+once a day) or `set /lineup/scan start` is **handed to one device's own scan** (`lineup.scan_mode:
+"device"`, the default). The multiplexer picks a device nobody is using (none of its tuners has a
+viewer of ours or another application; tuners only held for a quick return are let go), preferring
+one with ATSC 3.0 tuners because it finds both kinds of channel, marks all its tuners as scanning
+(they answer `804` and `/auto/` goes around them), starts `POST /lineup.post?scan=start` on the
+device, follows its `lineup_status.json` (shown as the multiplexer's own progress), and when it ends
+re-reads the devices' lineups. If every device is in use the request is refused (`409`): the client
+tries again later. The firmware scan takes all of a device's tuners and cuts whatever they stream,
+which is why it only ever runs on an idle device. Where a scan can change a device's lineup it
+does so on that device, and the other devices keep theirs.
+
+`lineup.scan_mode: "own"` keeps the multiplexer's own scan instead: it uses **every free tuner of
+every device** at once, each taking the next unscanned RF channel, never evicts a viewer, is capped by
+`lineup.scan_tuners_per_device`, teaches the multiplexer where channels are (and adds any the
+devices do not list) and re-reads the lineups. `scan_on_start` is off by default.
 
 ## Quick start
 
@@ -257,6 +275,10 @@ See [config.example.json](config.example.json). Notable keys:
 * `upstream.mode` – `http` (default) or `rtp`/`udp` (device pushes to this
   host; needs inbound UDP).
 * `linger` (5 s, `-1s` to disable), `client_buffer_mb` (16), `idle_release`.
+* `auto_join_direct` (true): an `/auto/` request joins a tuner a direct client (tvheadend, `/tunerN/`) already holds on the same channel.
+* `auto_join_other_locations` (true): the same station can be received on more than one RF channel (a second antenna or feed, a translator) while a device's lineup lists only one of them. An `/auto/` request for a channel that a session already open carries on another RF channel (found from that multiplex's own channel table) rides that session instead of taking a tuner. Never opens a tuner somewhere other than the lineup's place; set to `false` to always use the lineup's.
+* `evict_scans` (true): when every tuner is busy, an `/auto/` request takes one from a control client that is only collecting tables (tvheadend's idle guide scan): its PID filter has completed no programme for 10 s. The scanner finds its data stopped and its lock gone. A client that is watching a programme, or has a viewer on its tuner, is never touched. Set to `false` to leave direct clients' tuners alone even then.
+* `stream_ttl` (3, at most 8): the IP TTL of the video the multiplexer sends (HTTP streams and UDP/RTP targets). Real devices send their streams with a TTL of 3 so they cannot travel beyond a couple of routers; the multiplexer does the same, so a client has to be within two router hops of it. Larger values are quietly cut to 8 and `0` means the default: a device pushes a lot of bandwidth and must not be usable from afar, so use a VPN for remote viewing. For the same reason a UDP/RTP `target` (a control request cannot be authenticated, and its source can be forged) must be an address on a private IPv4 network (RFC 1918), this machine or link-local; any other target is refused.
 
 ### Web interface (`/ui/`)
 
