@@ -14,6 +14,9 @@ import (
 // under .m3u and .m3u8 alike (it is a playlist of channels, not HLS: the
 // streams themselves are MPEG transport streams over HTTP).
 //
+// Channels that are not HD carry group-id="SD": without it Channels DVR labels
+// every channel of an M3U source as HD.
+//
 // Channels carry tvg-id equal to the guide number, which is also the channel id
 // in the XMLTV guide on /epg, and the header points players at that guide.
 //
@@ -52,6 +55,10 @@ func (d *Device) handlePlaylist(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		fmt.Fprintf(&b, "#EXTINF:-1 tvg-id=\"%s\" tvg-chno=\"%s\" tvg-name=\"%s\"", m3uAttr(e.GuideNumber), m3uAttr(e.GuideNumber), m3uAttr(e.GuideName))
+		if !e.HD {
+			// Channels DVR treats every channel of an M3U source as HD unless told otherwise
+			b.WriteString(` group-id="SD"`)
+		}
 		if g := playlistGroup(group, e, source); g != "" {
 			fmt.Fprintf(&b, " group-title=\"%s\"", m3uAttr(g))
 		}
