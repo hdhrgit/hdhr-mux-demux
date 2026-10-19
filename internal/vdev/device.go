@@ -90,6 +90,8 @@ type Config struct {
 	StreamTTL int
 	// ScanPollInterval, if set, replaces the interval at which a device scan is polled.
 	ScanPollInterval time.Duration
+	// Version is the software version shown in the web interface and metrics.
+	Version string
 	// NoATSC3SSDP leaves the ATSC 3.0 primary device out of the announcements.
 	NoATSC3SSDP bool
 	// Settings, if set, backs the web interface's settings page. Restart is

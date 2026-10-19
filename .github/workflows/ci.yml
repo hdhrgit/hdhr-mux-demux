@@ -1,0 +1,23 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+      - name: cross-compile the targets we ship
+        run: |
+          for t in linux/amd64 linux/arm64 linux/arm/7; do
+            GOOS=${t%%/*}; rest=${t#*/}; GOARCH=${rest%%/*}; GOARM=""; [ "$rest" != "$GOARCH" ] && GOARM=${rest#*/}
+            CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH GOARM=$GOARM go build -o /dev/null ./cmd/hdhr-mux
+          done

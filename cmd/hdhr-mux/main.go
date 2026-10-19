@@ -29,6 +29,9 @@ import (
 	"hdhrmux/internal/vdev"
 )
 
+// version is set at build time: -ldflags "-X main.version=0.99.0".
+var version = "dev"
+
 // exitRestart is the exit status after "Restart" on the settings page: not 0, so
 // that supervisors that only restart on failure (Docker on-failure, systemd
 // Restart=on-failure) bring the multiplexer back too.
@@ -40,8 +43,14 @@ func run() int {
 	cfgPath := flag.String("config", "", "path to JSON config file (defaults are used if omitted)")
 	scan := flag.Bool("scan", false, "scan for channels at startup even if a lineup exists")
 	ignoreSettings := flag.Bool("ignore-settings", false, "ignore settings.json (saved from the web interface) in the state directory: the way out if a saved setting stops start-up")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("hdhr-mux", version)
+		return 0
+	}
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
+	log.Printf("hdhr-mux %s", version)
 
 	load := config.Load
 	if *ignoreSettings {
@@ -161,6 +170,7 @@ func run() int {
 		Settings:               config.NewManager(*cfgPath, cfg),
 		SettingsLocked:         cfg.SettingsLocked,
 		Restart:                func() { restart.Store(true); stop() },
+		Version:                version,
 	}, h, lu)
 	if err != nil {
 		log.Fatal(err)

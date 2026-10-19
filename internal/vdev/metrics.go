@@ -85,7 +85,7 @@ func (d *Device) writeMetrics(p *promWriter) {
 	pool := d.hub.Pool()
 	id := hdhrproto.FormatDeviceID(d.cfg.DeviceID)
 
-	p.gauge("hdhrmux_info", "The multiplexer; always 1.", 1, "device_id", id, "friendly_name", d.cfg.FriendlyName)
+	p.gauge("hdhrmux_info", "The multiplexer; always 1.", 1, "device_id", id, "friendly_name", d.cfg.FriendlyName, "version", d.cfg.Version)
 
 	// physical tuners
 	total := pool.TotalTuners()
