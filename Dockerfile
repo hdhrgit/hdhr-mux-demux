@@ -10,11 +10,10 @@ ARG VERSION=dev
 WORKDIR /src
 COPY . .
 RUN export GOOS=$TARGETOS GOARCH=$TARGETARCH GOARM=${TARGETVARIANT#v} CGO_ENABLED=0 \
- && go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/hdhr-mux ./cmd/hdhr-mux \
- && go build -trimpath -ldflags="-s -w" -o /out/hdhrctl ./cmd/hdhrctl
+ && go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/hdhr-mux ./cmd/hdhr-mux
 
 FROM scratch
-COPY --from=build /out/hdhr-mux /out/hdhrctl /usr/local/bin/
+COPY --from=build /out/hdhr-mux /usr/local/bin/
 # The working directory is the state directory (state_dir defaults to "."), so
 # the image runs with no configuration at all. Map a directory or a named volume
 # to it, or the lineup, guide, tuner numbering and saved settings are lost when

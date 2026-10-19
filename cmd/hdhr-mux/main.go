@@ -54,11 +54,12 @@ func main() {
 }
 
 func run() int {
-	cfgPath := flag.String("config", "", "path to JSON config file (defaults are used if omitted)")
+	cfgPath := flag.String("config", "", "path to a JSON config file (defaults to /etc/hdhr-mux/config.json if that exists; defaults are used without one)")
 	scan := flag.Bool("scan", false, "scan for channels at startup even if a lineup exists")
 	ignoreSettings := flag.Bool("ignore-settings", false, "ignore settings.json (saved from the web interface) in the state directory: the way out if a saved setting stops start-up")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	*cfgPath = pickConfig(*cfgPath, func(p string) bool { _, err := os.Stat(p); return err == nil })
 	if *showVersion {
 		fmt.Println("hdhr-mux", version)
 		return 0
@@ -230,4 +231,15 @@ func deviceID(cfg *config.Config) (uint32, error) {
 		return 0, err
 	}
 	return id, nil
+}
+
+// defaultConfig is read when -config is not given and the file exists: the
+// packages install no config file, so it is only there if somebody made one.
+const defaultConfig = "/etc/hdhr-mux/config.json"
+
+func pickConfig(flagValue string, exists func(string) bool) string {
+	if flagValue == "" && exists(defaultConfig) {
+		return defaultConfig
+	}
+	return flagValue
 }
