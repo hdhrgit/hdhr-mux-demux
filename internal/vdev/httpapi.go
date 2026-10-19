@@ -615,6 +615,9 @@ func (d *Device) handleStream(w http.ResponseWriter, r *http.Request) {
 	// Tells the client which tuner it got (real devices do the same); Channels
 	// uses it to poll that tuner's /tunerN/debug for its signal display.
 	h["X-HDHomeRun-Resource"] = []string{fmt.Sprintf("tuner%d", v.idx)}
+	if c, _ := r.Context().Value(connKey{}).(net.Conn); c != nil {
+		setTTL(c, d.cfg.StreamTTL)
+	}
 	w.WriteHeader(http.StatusOK)
 	countStreamResponse(http.StatusOK, "")
 	rc := http.NewResponseController(w)

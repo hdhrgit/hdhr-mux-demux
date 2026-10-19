@@ -29,6 +29,20 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
+func TestStreamTTL(t *testing.T) {
+	if c := load(t, ""); *c.StreamTTL != 3 || !*c.AutoJoinDirect {
+		t.Fatalf("stream_ttl %d, auto_join_direct %v: want 3 and true", *c.StreamTTL, *c.AutoJoinDirect)
+	}
+	if c := load(t, `{"stream_ttl": 0}`); *c.StreamTTL != 0 {
+		t.Fatal("stream_ttl 0 (the system default) was overridden")
+	}
+	p := filepath.Join(t.TempDir(), "c.json")
+	os.WriteFile(p, []byte(`{"stream_ttl": 300}`), 0o644)
+	if _, err := Load(p); err == nil {
+		t.Fatal("stream_ttl 300 accepted")
+	}
+}
+
 func TestEnvironmentOverrides(t *testing.T) {
 	t.Setenv("HDHOMERUN_DEVICES", "192.168.1.50, hdhr.local ,")
 	t.Setenv("HDHOMERUN_DISABLE_DISCOVERY", "true")

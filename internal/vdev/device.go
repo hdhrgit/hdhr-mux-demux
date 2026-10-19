@@ -75,6 +75,8 @@ type Config struct {
 	// AutoJoinDirect lets an /auto/ request join a tuner a direct client already
 	// holds on the same channel.
 	AutoJoinDirect bool
+	// StreamTTL is the IP TTL of the streams sent to clients (0 = system default).
+	StreamTTL int
 	// ScanPollInterval, if set, replaces the interval at which a device scan is polled.
 	ScanPollInterval time.Duration
 	// NoATSC3SSDP leaves the ATSC 3.0 primary device out of the announcements.
@@ -224,7 +226,8 @@ func (d *Device) Start() error {
 			inner.ServeHTTP(w, r)
 		})
 	}
-	d.httpSrv = &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
+	d.httpSrv = &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second,
+		ConnContext: func(ctx context.Context, c net.Conn) context.Context { return withConn(ctx, c) }}
 	d.wg.Add(3)
 	go func() { defer d.wg.Done(); d.httpSrv.Serve(d.httpLn) }()
 	if d.streamLn != nil {

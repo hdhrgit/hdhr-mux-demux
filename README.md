@@ -276,6 +276,7 @@ See [config.example.json](config.example.json). Notable keys:
   host; needs inbound UDP).
 * `linger` (5 s, `-1s` to disable), `client_buffer_mb` (16), `idle_release`.
 * `auto_join_direct` (true): an `/auto/` request joins a tuner a direct client (tvheadend, `/tunerN/`) already holds on the same channel.
+* `stream_ttl` (3): the IP TTL of the video the multiplexer sends (HTTP streams and UDP/RTP targets). Real devices send their streams with a TTL of 3 so they cannot travel beyond a couple of routers; the multiplexer does the same, so a client has to be within two router hops of it. `0` keeps the system default (64), which allows remote access across a routed network.
 
 ### Web interface (`/ui/`)
 

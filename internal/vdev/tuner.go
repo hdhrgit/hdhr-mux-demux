@@ -974,6 +974,7 @@ func newSender(v *VTuner, sub *hub.Sub, tgt string) (*sender, error) {
 	if err != nil {
 		return nil, err
 	}
+	setTTL(conn, v.d.cfg.StreamTTL)
 	s := &sender{v: v, conn: conn, rtp: t.rtp, quit: make(chan struct{}), done: make(chan struct{})}
 	sub.Enable()
 	go s.run(sub)

@@ -68,6 +68,10 @@ type Config struct {
 	// already receiving joins that tuner instead of taking another. Never the other
 	// way round: a direct client does not join an /auto/ stream.
 	AutoJoinDirect *bool `json:"auto_join_direct"`
+	// StreamTTL is the IP TTL of the video the multiplexer sends (HTTP streams, UDP/RTP
+	// targets), 3 by default like the devices, so that it does not travel beyond a
+	// couple of routers. 0 keeps the system default (64).
+	StreamTTL *int `json:"stream_ttl"`
 	// ClientBufferMB is the per-client queue for slow consumers (default 16).
 	ClientBufferMB int      `json:"client_buffer_mb"`
 	IdleRelease    Duration `json:"idle_release"` // free tuners left tuned without a viewer
@@ -208,6 +212,13 @@ func Load(path string) (*Config, error) {
 	if c.AutoJoinDirect == nil {
 		t := true
 		c.AutoJoinDirect = &t
+	}
+	if c.StreamTTL == nil {
+		n := 3
+		c.StreamTTL = &n
+	}
+	if *c.StreamTTL < 0 || *c.StreamTTL > 255 {
+		return nil, fmt.Errorf("stream_ttl %d: want 0-255", *c.StreamTTL)
 	}
 	applyEnv(c)
 	if c.StreamListen == "" {

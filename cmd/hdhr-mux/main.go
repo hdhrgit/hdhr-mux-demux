@@ -122,6 +122,7 @@ func main() {
 		ScanTuners:      cfg.Lineup.ScanTuners,
 		ScanMode:        cfg.Lineup.ScanMode,
 		AutoJoinDirect:  *cfg.AutoJoinDirect,
+		StreamTTL:       *cfg.StreamTTL,
 		LineupRefresh:   refresh,
 		GuideRefresh:    guideRefresh,
 		GuideHold:       time.Duration(cfg.Guide.Hold),
