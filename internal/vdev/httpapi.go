@@ -436,7 +436,7 @@ func httpErr(w http.ResponseWriter, code int, hdhr string) {
 // reuses any tuner already carrying the stream, and only then opens a new one.
 func (d *Device) openStream(ctx context.Context, which string, rq streamReq) (*VTuner, *hub.Sub, error) {
 	start := func(v *VTuner) (*VTuner, *hub.Sub, error) {
-		sub, err := v.startHTTP(ctx, rq.spec, rq.program, rq.vchannel, rq.service)
+		sub, err := v.startHTTP(ctx, rq.spec, rq.program, rq.vchannel, rq.service, which == "auto")
 		return v, sub, err
 	}
 	if which == "auto" {
@@ -453,11 +453,9 @@ func (d *Device) openStream(ctx context.Context, which string, rq streamReq) (*V
 	if v.tryReserve() {
 		return start(v)
 	}
-	sub, err := v.joinHTTP(ctx, rq.spec, rq.program, rq.service, true)
-	if err != nil {
-		return nil, nil, err
-	}
-	return v, sub, nil
+	// A tuner asked for by number is that client's, as on a real device: if it is
+	// busy, even with the same channel, the answer is 804. (Sharing is for /auto/.)
+	return nil, nil, ErrBusy
 }
 
 func (d *Device) openAuto(ctx context.Context, rq streamReq, start func(*VTuner) (*VTuner, *hub.Sub, error)) (*VTuner, *hub.Sub, error) {

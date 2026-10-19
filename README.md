@@ -25,10 +25,11 @@ tuner between every client watching the same RF channel**.
 `GET http://MUX:5004/auto/v2.4`
 
 1. The lineup (built by the scan) says 2.4 is program 6 on 545 MHz, ATSC 1.0.
-2. `/auto/` first looks for a tuner already carrying the **same RF channel** (or ATSC 3.0
-   service) and joins it with its own program filter; only otherwise does it open a free
-   tuner. `/tunerN/...` asks for that exact tuner (joining if it carries the same stream,
-   else `804 Tuner In Use`). `805 All Tuners In Use` if nothing can serve the request.
+2. `/auto/` first looks for a tuner an earlier `/auto/` request opened on the **same RF channel**
+   (or ATSC 3.0 service) and joins it with its own program filter; only otherwise does it open a
+   free tuner. `/tunerN/...` asks for that exact tuner and gets it, or `804 Tuner In Use` if it is busy,
+   even with the same channel (as on a real device). `805 All Tuners In Use` if nothing can serve
+   an `/auto/` request.
 3. If no tuner carries 545 MHz yet, the best free one is chosen and opened with
    `GET http://DEVICE:5004/tunerM/ch545000000` (the whole multiplex).
 4. The viewer's filter keeps PAT (rewritten to just program 6), PMT, PCR and
@@ -69,8 +70,13 @@ over the LAN instead of 19; a lingering stream nobody watches drops to the table
   tuners are 0-3, device 1's are 4-7, and so on.
 * **Strict 1:1.** Virtual tuner *N* is physical tuner *N*: whatever it streams
   comes from that tuner, and status queries for it (control protocol or
-  `status.json`) describe it. Several viewers of the same RF channel share one
+  `status.json`) describe it. Several `/auto/` viewers of the same RF channel share one
   virtual tuner (each with its own program filter); that is how tuners are saved.
+* **Direct requests are trusted.** A client that asks for a tuner by number (HTTP `/tunerN/`, or the
+  control protocol: tvheadend, `hdhomerun_config`, which lock it and may receive over UDP/RTP) gets
+  that tuner and keeps it, as on a real HomeRun; nobody else is attached to it. Sharing happens
+  between `/auto/` requests only (Channels DVR, the playlist, DLNA): they join each other, never a
+  tuner somebody asked for directly.
 * **`/auto/` maximises free tuners.** It first reuses a tuner that already carries
   the channel (busy, or still lingering on it); only if there is none does it open
   a new one, choosing the one that hurts future requests least:
@@ -82,8 +88,7 @@ over the LAN instead of 19; a lingering stream nobody watches drops to the table
     lingering stream come last. A tuner another application is using is never
     taken: `/tunerN/` for it answers `804` and its status shows what the other
     application is doing.
-* `/tunerN/` asks for exactly that tuner. If it is busy but already carries the
-  same stream, the request joins it; otherwise `804 Tuner In Use`.
+* `/tunerN/` asks for exactly that tuner: it gets it or `804 Tuner In Use`.
 * With `linger` (default 5 s) a tuner stays tuned after its last viewer leaves
   so flipping back is instant, but it is **given up immediately** when anyone
   needs a tuner, so channel flipping never runs out.

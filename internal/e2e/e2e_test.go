@@ -551,12 +551,13 @@ func TestControlProtocolAndRTP(t *testing.T) {
 	if v := mustGet("/tuner0/target"); !strings.HasPrefix(v, "rtp://") {
 		t.Fatalf("target %q", v)
 	}
-	// An HTTP viewer on the same RF channel joins the same physical tuner.
+	// A tuner a control client has tuned is its own, as on a real device: an /auto/
+	// viewer of the same RF channel gets another tuner rather than riding on it.
 	h, _ := e.open("/auto/v7.1")
 	defer h.close()
 	h.read(t, 188*20)
-	if e.activePhysical() != 1 {
-		t.Fatalf("expected 1 physical tuner, got %d", e.activePhysical())
+	if e.activePhysical() != 2 {
+		t.Fatalf("expected 2 physical tuners (the control client's and the /auto/ viewer's), got %d", e.activePhysical())
 	}
 	h.close()
 
@@ -1096,65 +1097,82 @@ func TestErrorHeadersLikeRealDevice(t *testing.T) {
 // A request for a specific tuner that is busy is first checked against what
 // the tuner carries: the same RF channel (or ATSC 3.0 service) can be served
 // by joining it, only a different channel gets "804 Tuner In Use".
-func TestSpecificBusyTunerJoins(t *testing.T) {
-	e := setup(t, []int{2}, 2, func(c *vdev.Config) {})
+// A tuner asked for by number belongs to the client that asked, as on a real
+// device: busy is busy, even when the other client wants the same channel. Sharing
+// is for /auto/ requests, which join each other but not a tuner somebody asked
+// for directly.
+func TestDirectRequestsAreNotShared(t *testing.T) {
+	e := setup(t, []int{3}, 3, nil)
 	e.lu.Replace(append(append(append([]lineup.Entry{}, testLineup...), extraLineup...), atsc3Lineup...))
 
-	a, _ := e.open("/tuner0/v7.1")
+	a, ra := e.open("/tuner0/v7.1")
 	if a == nil {
 		t.Fatal("first viewer refused")
 	}
 	defer a.close()
 	a.read(t, 188*20)
-
-	b, resp := e.open("/tuner0/v7.2") // same RF channel, other program
-	if b == nil {
-		t.Fatalf("same-channel request on busy tuner0 refused: %d %v", resp.StatusCode, resp.Header)
-	}
-	defer b.close()
-	an := analyze(t, b.read(t, 188*100))
-	if an.ccErrors != 0 || len(an.esProgs) != 1 || !an.esProgs[2] {
-		t.Fatalf("joined viewer got %v (cc=%d), want only program 2", an.esProgs, an.ccErrors)
-	}
-	if e.activePhysical() != 1 {
-		t.Fatalf("joining used %d physical tuners", e.activePhysical())
+	if ra.Header.Get("X-HDHomeRun-Resource") != "tuner0" {
+		t.Fatalf("resource %q", ra.Header.Get("X-HDHomeRun-Resource"))
 	}
 
-	_, resp = e.open("/tuner0/v14.1") // different RF channel
-	if resp.StatusCode != 503 || resp.Header.Get("X-HDHomeRun-Error") != "804 Tuner In Use" {
-		t.Fatalf("different channel on busy tuner: %d %v", resp.StatusCode, resp.Header)
+	// the same RF channel (other programme, same programme) on the busy tuner: 804
+	for _, ch := range []string{"v7.2", "v7.1"} {
+		if _, resp := e.open("/tuner0/" + ch); resp.StatusCode != 503 || resp.Header.Get("X-HDHomeRun-Error") != "804 Tuner In Use" {
+			t.Fatalf("/tuner0/%s on a busy tuner: %d %v", ch, resp.StatusCode, resp.Header)
+		}
 	}
 
-	// the first viewer leaving must not take the tuner away from the second
-	a.close()
-	time.Sleep(300 * time.Millisecond)
-	b.read(t, 188*50)
-	_, resp = e.open("/tuner0/v14.1")
-	if resp.StatusCode != 503 {
-		t.Fatalf("tuner0 was freed while a viewer remains: %d", resp.StatusCode)
-	}
-	b.close()
-	waitFor(t, "tuner released with the last viewer", 3*time.Second, func() bool { return e.activePhysical() == 0 })
-	c, resp := e.open("/tuner0/v14.1")
+	// an /auto/ request for that channel does not ride on tuner 0 either
+	c, rc := e.open("/auto/v7.2")
 	if c == nil {
-		t.Fatalf("tuner0 still busy after everyone left: %d", resp.StatusCode)
+		t.Fatal("/auto/ refused")
 	}
-	c.close()
+	defer c.close()
+	c.read(t, 188*20)
+	if r := rc.Header.Get("X-HDHomeRun-Resource"); r == "tuner0" || r == "" {
+		t.Fatalf("/auto/ joined the tuner somebody asked for by number: %q", r)
+	}
+	if n := e.activePhysical(); n != 2 {
+		t.Fatalf("%d physical tuners, want 2 (tuner 0 for its owner, one for /auto/)", n)
+	}
 
-	// ATSC 3.0: only the identical service joins
+	// ... but /auto/ viewers share with each other
+	d, rd := e.open("/auto/v7.1")
+	if d == nil {
+		t.Fatal("second /auto/ viewer refused")
+	}
+	defer d.close()
+	if an := analyze(t, d.read(t, 188*100)); an.ccErrors != 0 || len(an.esProgs) != 1 || !an.esProgs[1] {
+		t.Fatalf("shared /auto/ viewer got %v (cc=%d)", an.esProgs, an.ccErrors)
+	}
+	if rd.Header.Get("X-HDHomeRun-Resource") != rc.Header.Get("X-HDHomeRun-Resource") {
+		t.Fatalf("the second /auto/ viewer should share tuner %q, got %q", rc.Header.Get("X-HDHomeRun-Resource"), rd.Header.Get("X-HDHomeRun-Resource"))
+	}
+	if n := e.activePhysical(); n != 2 {
+		t.Fatalf("%d physical tuners after /auto/ sharing, want 2", n)
+	}
+
+	// the owner leaving frees its tuner
+	a.close()
+	waitFor(t, "tuner 0 released with its owner", 3*time.Second, func() bool {
+		x, resp := e.open("/tuner0/v14.1")
+		if x != nil {
+			x.close()
+		}
+		return resp.StatusCode == 200
+	})
+	c.close()
+	d.close()
+
+	// ATSC 3.0: one tuner per service as before, and a busy one is just busy
+	waitFor(t, "everything released", 4*time.Second, func() bool { return e.activePhysical() == 0 })
 	d1, _ := e.open("/tuner1/v104.1")
 	if d1 == nil {
 		t.Fatal("ATSC 3.0 viewer refused")
 	}
 	defer d1.close()
-	d2, resp := e.open("/tuner1/v104.1")
-	if d2 == nil {
-		t.Fatalf("same ATSC 3.0 service refused: %d", resp.StatusCode)
-	}
-	defer d2.close()
-	_, resp = e.open("/tuner1/v107.1")
-	if resp.StatusCode != 503 || resp.Header.Get("X-HDHomeRun-Error") != "804 Tuner In Use" {
-		t.Fatalf("other ATSC 3.0 service on a busy tuner: %d %v", resp.StatusCode, resp.Header)
+	if _, resp := e.open("/tuner1/v104.1"); resp.StatusCode != 503 {
+		t.Fatalf("the same ATSC 3.0 service by number on a busy tuner: %d", resp.StatusCode)
 	}
 }
 
@@ -1181,23 +1199,34 @@ func TestStrictMappingAndReuse(t *testing.T) {
 	if got := e.fakes[0].TunedChannels(); got[0] == "none" || got[1] == "none" || got[2] != "none" || got[3] != "none" {
 		t.Fatalf("physical tuners in use %v, want exactly 0 and 1", got)
 	}
-	// /auto/ for the same channel joins an existing tuner instead of a third
+	// /auto/ does not ride on tuners that were asked for by number: it takes a third,
+	// and a second /auto/ viewer then shares that one
 	c, rc := e.open("/auto/v7.1")
 	if c == nil {
 		t.Fatal("auto refused")
 	}
 	defer c.close()
-	if r := rc.Header.Get("X-HDHomeRun-Resource"); r != "tuner0" && r != "tuner1" {
-		t.Fatalf("a joined viewer must be told the tuner it shares, got %q", r)
+	r := rc.Header.Get("X-HDHomeRun-Resource")
+	if r == "tuner0" || r == "tuner1" || r == "" {
+		t.Fatalf("/auto/ rode on a tuner somebody asked for by number: %q", r)
 	}
 	c.read(t, 188*20)
-	if got := e.activePhysical(); got != 2 {
-		t.Fatalf("/auto/ opened another tuner (%d active) instead of reusing", got)
+	d, rd := e.open("/auto/v7.2")
+	if d == nil {
+		t.Fatal("auto refused")
+	}
+	defer d.close()
+	if rd.Header.Get("X-HDHomeRun-Resource") != r {
+		t.Fatalf("the second /auto/ viewer should share %q, got %q", r, rd.Header.Get("X-HDHomeRun-Resource"))
+	}
+	d.read(t, 188*20)
+	if got := e.activePhysical(); got != 3 {
+		t.Fatalf("%d physical tuners active, want 3 (two by number, one shared by two /auto/ viewers)", got)
 	}
 	var st []map[string]any
 	getJSON(t, e.api+"/status.json", &st)
-	if st[2]["VctNumber"] != nil || st[3]["VctNumber"] != nil {
-		t.Fatalf("/auto/ occupied a free virtual tuner: %v", st)
+	if st[3]["VctNumber"] != nil {
+		t.Fatalf("the unused virtual tuner shows a channel: %v", st[3])
 	}
 }
 

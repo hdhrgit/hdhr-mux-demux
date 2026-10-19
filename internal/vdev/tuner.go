@@ -50,9 +50,13 @@ type VTuner struct {
 	httpSubs   []*hub.Sub
 	viewers    map[*hub.Sub]viewerMeta // who is behind each HTTP viewer
 	httpOpened bool
-	lockkey    uint32
-	lockIP     string
-	lastUse    time.Time
+	// autoOwned: the stream was opened by an /auto/ request, so other /auto/
+	// requests may join it. A tuner somebody asked for directly (by number, or
+	// over the control protocol) belongs to them, as on a real device.
+	autoOwned bool
+	lockkey   uint32
+	lockIP    string
+	lastUse   time.Time
 
 	physStatus string // cached status of the physical counterpart
 	physOK     bool
@@ -171,7 +175,7 @@ func (v *VTuner) releaseAll(clearTarget bool) {
 	v.stopStream()
 	v.mu.Lock()
 	v.tuned, v.chanStr, v.vchannel = false, "none", ""
-	v.program, v.explicit, v.httpUse = 0, false, false
+	v.program, v.explicit, v.httpUse, v.autoOwned = 0, false, false, false
 	v.httpSubs, v.httpOpened, v.viewers = nil, false, nil
 	if clearTarget {
 		v.targetStr = "none"
@@ -211,7 +215,9 @@ func (v *VTuner) tryReserve() bool {
 }
 
 // startHTTP (after tryReserve) tunes and selects the program.
-func (v *VTuner) startHTTP(ctx context.Context, spec chanmap.Spec, program uint16, vchannel string, service bool) (*hub.Sub, error) {
+// startHTTP tunes the tuner for an HTTP viewer; auto says the request came to
+// /auto/ (others like it may then join), not for this tuner by number.
+func (v *VTuner) startHTTP(ctx context.Context, spec chanmap.Spec, program uint16, vchannel string, service, auto bool) (*hub.Sub, error) {
 	v.op.Lock()
 	defer v.op.Unlock()
 	if err := v.tuneLocked(ctx, spec, hub.Options{Program: program, Service: service}); err != nil {
@@ -224,6 +230,7 @@ func (v *VTuner) startHTTP(ctx context.Context, spec chanmap.Spec, program uint1
 	v.applyFilterLocked()
 	sub := v.sub
 	v.httpSubs, v.httpOpened = []*hub.Sub{sub}, true
+	v.autoOwned = auto
 	v.mu.Unlock()
 	sub.Enable()
 	return sub, nil
@@ -242,7 +249,7 @@ func (v *VTuner) joinHTTP(ctx context.Context, spec chanmap.Spec, program uint16
 	}
 	o := v.opts(program, service)
 	v.mu.Lock()
-	ok := v.tuned && v.sub != nil && !v.lockedLocked() && v.sub.Key() == v.d.hub.KeyFor(spec, o)
+	ok := v.tuned && v.sub != nil && v.autoOwned && !v.lockedLocked() && v.sub.Key() == v.d.hub.KeyFor(spec, o)
 	v.mu.Unlock()
 	v.op.Unlock()
 	if !ok {
