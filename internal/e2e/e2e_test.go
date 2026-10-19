@@ -8,12 +8,14 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -66,6 +68,8 @@ var (
 	testChannels []fakehdhr.Channel          // what the fake devices broadcast (nil = channels)
 	testMask     = false                     // ask the devices to send only the PIDs being watched
 	testModels   []string                    // device models by index (default: ATSC 3.0 capable)
+	testSEQRamp  time.Duration               // fake devices report a symbol quality of 0 this long after a tune
+	testSettle   time.Duration               // hub.SetSignalSettle
 )
 
 func model(i int) string {
@@ -80,7 +84,7 @@ func setup(t *testing.T, physTuners []int, virtual int, mod func(*vdev.Config)) 
 	e := &env{t: t}
 	var addrs []string
 	for i, n := range physTuners {
-		f, err := fakehdhr.Start(fakehdhr.Config{DeviceID: hdhrproto.MakeDeviceID(0x10200000 + uint32(i)<<8), Tuners: n, Channels: pick(testChannels, channels), Model: model(i)})
+		f, err := fakehdhr.Start(fakehdhr.Config{DeviceID: hdhrproto.MakeDeviceID(0x10200000 + uint32(i)<<8), Tuners: n, Channels: pick(testChannels, channels), Model: model(i), SEQRamp: testSEQRamp})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -110,6 +114,7 @@ func setup(t *testing.T, physTuners []int, virtual int, mod func(*vdev.Config)) 
 	}
 	e.hub = hub.New(pool, hub.Config{Linger: testLinger, ClientBuffer: testBuffer, Mask: testMask})
 	t.Cleanup(e.hub.Close)
+	e.hub.SetSignalSettle(testSettle)
 	e.lu, _ = lineup.Open("")
 	e.lu.Replace(testLineup)
 	cfg := vdev.Config{
@@ -3080,3 +3085,109 @@ func TestSettingsApplyWithoutRestart(t *testing.T) {
 	}
 	waitFor(t, "the tuner of the direct client is shared once the setting is on", 4*time.Second, func() bool { return resource() == "tuner0" })
 }
+
+// A tuner's symbol quality reads 0 for a moment after it locks. Channels DVR counts
+// every second of it as a signal error, so for signal_settle after a stream starts
+// a zero is shown as the last good reading; the activity page keeps the truth.
+func TestSignalQualityZeroIsHiddenAtStart(t *testing.T) {
+	for _, settle := range []time.Duration{2 * time.Second, 0} {
+		t.Run(fmt.Sprint("settle=", settle), func(t *testing.T) {
+			old1, old2 := testSEQRamp, testSettle
+			testSEQRamp, testSettle = 1500*time.Millisecond, settle
+			defer func() { testSEQRamp, testSettle = old1, old2 }()
+			e := setup(t, []int{2}, 2, nil)
+			c, rc := e.open("/auto/v7.1")
+			if c == nil {
+				t.Fatalf("refused: %d", rc.StatusCode)
+			}
+			defer c.close()
+			res := rc.Header.Get("X-HDHomeRun-Resource")
+			ctl := hdhrproto.NewControl(e.ctl)
+			defer ctl.Close()
+			zeroSeen, readings := 0, 0
+			for i := 0; i < 12; i++ { // the first 1.2 s, while the fake reports 0
+				st, err := ctl.Get("/" + res + "/status")
+				if err != nil {
+					t.Fatal(err)
+				}
+				readings++
+				if strings.Contains(st, "seq=0 ") {
+					zeroSeen++
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			if settle > 0 && zeroSeen != 0 {
+				t.Errorf("a client saw a symbol quality of 0 in %d of %d readings with signal_settle on", zeroSeen, readings)
+			}
+			if settle == 0 && zeroSeen == 0 {
+				t.Errorf("no zero readings at all with signal_settle off: the test is not testing anything")
+			}
+			time.Sleep(1500 * time.Millisecond)
+			st, _ := ctl.Get("/" + res + "/status")
+			if !strings.Contains(st, "seq=100 ") {
+				t.Errorf("after the ramp: %q", st)
+			}
+		})
+	}
+}
+
+// With lineup.atsc3 off the ATSC 3.0 channels are left out of the listings (lineup,
+// playlist, guide) but a client that asks for one by number is still served.
+func TestHidingATSC3LeavesThemUnlistedButTunable(t *testing.T) {
+	e := setup(t, []int{3}, 3, func(c *vdev.Config) { c.HideATSC3 = true })
+	e.lu.Replace(append(append([]lineup.Entry{}, testLineup...), atsc3Lineup...))
+	for _, path := range []string{"/lineup.json", "/playlist.m3u8", "/epg"} {
+		r, err := http.Get(e.api + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(r.Body)
+		r.Body.Close()
+		if strings.Contains(string(b), "104.1") || strings.Contains(string(b), "NEXT-A") {
+			t.Errorf("%s lists an ATSC 3.0 channel", path)
+		}
+		if path != "/epg" && !strings.Contains(string(b), "7.1") {
+			t.Errorf("%s lost the ATSC 1.0 channels", path)
+		}
+	}
+	c, rc := e.open("/auto/v104.1")
+	if c == nil {
+		t.Fatalf("a hidden ATSC 3.0 channel was not served: %d %v", rc.StatusCode, rc.Header)
+	}
+	c.close()
+}
+
+// An own scan with no ATSC 3.0 tuner to hand a strong-but-unlockable channel to says
+// so, instead of silently missing it.
+func TestScanSaysWhenATSC3ChannelsWereNotScanned(t *testing.T) {
+	e := setup(t, []int{4}, 4, nil)
+	// viewers hold tuners 0 and 1, the ones that can lock ATSC 3.0, so the scan only gets 2 and 3
+	ctl := hdhrproto.NewControl(e.ctl)
+	defer ctl.Close()
+	for i, f := range []string{"auto:177000000", "auto:473000000"} {
+		if _, err := ctl.Set(fmt.Sprintf("/tuner%d/channel", i), f, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var buf syncLog
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	_, err := e.hub.Scan(context.Background(), hub.ScanConfig{
+		Channels: []chanmap.Channel{{Number: 1, Frequency: 605000000}, {Number: 2, Frequency: 177000000}},
+		LockWait: 300 * time.Millisecond, InfoWait: 500 * time.Millisecond,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := buf.String(); !strings.Contains(s, "need an ATSC 3.0 tuner and none was free") || !strings.Contains(s, "605000000") {
+		t.Errorf("the scan did not say it missed ATSC 3.0 channels:\n%s", s)
+	}
+}
+
+type syncLog struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncLog) Write(p []byte) (int, error) { s.mu.Lock(); defer s.mu.Unlock(); return s.b.Write(p) }
+func (s *syncLog) String() string              { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }

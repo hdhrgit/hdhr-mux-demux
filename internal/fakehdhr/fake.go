@@ -50,6 +50,9 @@ type Config struct {
 	Model      string // /sys/model, default hdhomerun5_atsc3
 	// ScanDuration is how long a scan started over HTTP takes (default 800 ms).
 	ScanDuration time.Duration
+	// SEQRamp makes a freshly tuned tuner report a symbol quality of 0 for this long, as
+	// real tuners do while their figures climb.
+	SEQRamp time.Duration
 }
 
 type Device struct {
@@ -78,6 +81,7 @@ type Device struct {
 
 type tuner struct {
 	idx      int
+	tunedAt  time.Time // when it was last tuned (for SEQRamp)
 	channel  string
 	freq     uint64
 	chmap    string
@@ -369,7 +373,7 @@ func (d *Device) tune(t *tuner, v string) error {
 	if err != nil || !ok {
 		return fmt.Errorf("ERROR: invalid channel")
 	}
-	t.channel, t.freq = v, spec.Frequency
+	t.channel, t.freq, t.tunedAt = v, spec.Frequency, time.Now()
 	d.tuneLog = append(d.tuneLog, v)
 	if t.target != "none" {
 		d.startStream(t)
@@ -415,7 +419,11 @@ func (d *Device) status(t *tuner) string {
 	if t.cancel != nil {
 		bps, pps = d.cfg.Bitrate, d.cfg.Bitrate/8/188
 	}
-	return fmt.Sprintf("ch=8vsb:%d lock=8vsb ss=87 snq=92 seq=100 bps=%d pps=%d", t.freq, bps, pps)
+	seq := 100
+	if d.cfg.SEQRamp > 0 && time.Since(t.tunedAt) < d.cfg.SEQRamp {
+		seq = 0
+	}
+	return fmt.Sprintf("ch=8vsb:%d lock=8vsb ss=87 snq=92 seq=%d bps=%d pps=%d", t.freq, seq, bps, pps)
 }
 
 func (d *Device) streaminfo(t *tuner) string {

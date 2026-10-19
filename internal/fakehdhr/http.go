@@ -209,7 +209,7 @@ func (d *Device) serveHTTPStream(w http.ResponseWriter, r *http.Request) {
 		ch = sel
 	}
 	host, _, _ := net.SplitHostPort(r.RemoteAddr)
-	t.channel, t.freq = fmt.Sprintf("auto:%d", freq), freq
+	t.channel, t.freq, t.tunedAt = fmt.Sprintf("auto:%d", freq), freq, time.Now()
 	t.resetFilter()
 	t.lockkey, t.lockIP, t.target = 0xFFFFFFFE, host, "http://"+r.RemoteAddr
 	cancel := make(chan struct{})

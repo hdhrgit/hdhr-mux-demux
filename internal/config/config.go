@@ -83,6 +83,10 @@ type Config struct {
 	Guide Guide `json:"guide"`
 
 	Linger Duration `json:"linger"` // keep an unused physical tuner tuned this long (default 5s, 0 disables)
+	// SignalSettle (default 2s, 0 = off): for this long after a stream starts, a symbol quality of
+	// 0 (how a tuner starts before its figures climb) is not shown to clients. Channels DVR
+	// counts each such second as a signal error.
+	SignalSettle Duration `json:"signal_settle"`
 	// AutoJoinDirect (default true): an /auto/ request for a channel a direct client
 	// (tvheadend over the control protocol, or a request for a tuner by number) is
 	// already receiving joins that tuner instead of taking another. Never the other
@@ -146,6 +150,9 @@ type Lineup struct {
 	ScanMode string `json:"scan_mode"`
 	// ScanTuners limits tuners used per device by a scan (0 = every free one).
 	ScanTuners int `json:"scan_tuners_per_device"`
+	// ATSC3 (default true) lists ATSC 3.0 channels in the lineup, playlist and guide; false
+	// leaves them out of the listings (they still tune when asked for by number).
+	ATSC3 *bool `json:"atsc3"`
 }
 
 // applyEnv lets the environment override the file, using the same variable
@@ -282,6 +289,10 @@ func loadConfig(path string, overlay []byte, env bool) (*Config, error) {
 		t := true
 		c.EvictScans = &t
 	}
+	if c.Lineup.ATSC3 == nil {
+		t := true
+		c.Lineup.ATSC3 = &t
+	}
 	// The streams must not travel the internet at large (the devices push a lot of
 	// bandwidth, which would make a fine weapon): 3 unless set, never more than 8.
 	n := 3
@@ -322,6 +333,7 @@ func loadConfig(path string, overlay []byte, env bool) (*Config, error) {
 		}
 	}
 	setDur(&c.Linger, "linger", 5*time.Second)
+	setDur(&c.SignalSettle, "signal_settle", 2*time.Second)
 	setDur(&c.Guide.Refresh, "guide.refresh", time.Hour)
 	setDur(&c.Guide.StartDelay, "guide.start_delay", 90*time.Second)
 	setDur(&c.Lineup.Refresh, "lineup.refresh", 10*time.Minute)

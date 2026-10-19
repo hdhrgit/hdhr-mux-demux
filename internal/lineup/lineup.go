@@ -31,10 +31,11 @@ type Entry struct {
 }
 
 type Lineup struct {
-	mu      sync.RWMutex
-	path    string
-	entries []Entry
-	rev     atomic.Uint64
+	mu        sync.RWMutex
+	path      string
+	entries   []Entry
+	rev       atomic.Uint64
+	hideATSC3 atomic.Bool // leave ATSC 3.0 channels out of listings (they still tune)
 }
 
 // Open loads the lineup from path (a missing file is an empty lineup). An
@@ -108,13 +109,19 @@ func (l *Lineup) Entries(all bool) []Entry {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	out := make([]Entry, 0, len(l.entries))
+	hide := l.hideATSC3.Load()
 	for _, e := range l.entries {
-		if all || !e.Disabled {
+		if all || !e.Disabled && !(hide && e.Modulation == "atsc3") {
 			out = append(out, e)
 		}
 	}
 	return out
 }
+
+// SetHideATSC3 leaves ATSC 3.0 channels out of the listings Entries(false) gives (the
+// lineup, the playlist, the guide). Find and Entries(true) still have them, so a
+// client that asks for one by number is still served.
+func (l *Lineup) SetHideATSC3(hide bool) { l.hideATSC3.Store(hide) }
 
 // Find looks a channel up by its guide number ("8.1").
 func (l *Lineup) Find(guide string) (Entry, bool) {

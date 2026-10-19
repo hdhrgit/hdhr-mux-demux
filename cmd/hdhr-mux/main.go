@@ -127,6 +127,7 @@ func run() int {
 	}
 	h := hub.New(pool, hub.Config{Linger: time.Duration(cfg.Linger), ClientBuffer: cfg.ClientBufferMB << 20, Mask: *cfg.Upstream.Mask})
 	defer h.Close()
+	h.SetSignalSettle(time.Duration(cfg.SignalSettle))
 
 	guideRefresh, refresh := time.Duration(cfg.Guide.Refresh), time.Duration(cfg.Lineup.Refresh)
 	settings := config.NewManager(*cfgPath, cfg)
@@ -147,6 +148,7 @@ func run() int {
 		AutoJoinDirect:         *cfg.AutoJoinDirect,
 		AutoJoinOtherLocations: *cfg.AutoJoinOtherLocations,
 		EvictScans:             *cfg.EvictScans,
+		HideATSC3:              !*cfg.Lineup.ATSC3,
 		StreamTTL:              *cfg.StreamTTL,
 		LineupRefresh:          refresh,
 		GuideRefresh:           guideRefresh,
