@@ -123,6 +123,7 @@ func main() {
 		ScanMode:               cfg.Lineup.ScanMode,
 		AutoJoinDirect:         *cfg.AutoJoinDirect,
 		AutoJoinOtherLocations: *cfg.AutoJoinOtherLocations,
+		EvictScans:             *cfg.EvictScans,
 		StreamTTL:              *cfg.StreamTTL,
 		LineupRefresh:          refresh,
 		GuideRefresh:           guideRefresh,

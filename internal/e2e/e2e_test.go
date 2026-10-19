@@ -2783,3 +2783,67 @@ func TestAutoRidesASessionAtAnotherLocation(t *testing.T) {
 		})
 	}
 }
+
+// Every tuner busy: a control client that only collects tables (tvheadend's idle
+// guide scan) gives its tuner up to a viewer; one that is watching a programme
+// does not.
+func TestEPGScansGiveWayToViewers(t *testing.T) {
+	for _, evict := range []bool{true, false} {
+		t.Run(fmt.Sprintf("evict=%v", evict), func(t *testing.T) {
+			e := setup(t, []int{2}, 2, func(c *vdev.Config) { c.EvictScans, c.ScanGrace = evict, 300*time.Millisecond })
+			e.lu.Replace(append(append([]lineup.Entry{}, testLineup...), extraLineup...))
+			ctl := hdhrproto.NewControl(e.ctl)
+			defer ctl.Close()
+			rx, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rx.Close()
+			set := func(name, val string) {
+				t.Helper()
+				if _, err := ctl.Set(name, val, 0); err != nil {
+					t.Fatalf("set %s %s: %v", name, val, err)
+				}
+			}
+			tgt := "udp://" + rx.LocalAddr().String()
+			set("/tuner0/channel", "auto:177000000") // collecting tables only
+			set("/tuner0/filter", "0x0000 0x1ffb 0x1d00-0x1d0f")
+			set("/tuner0/target", tgt)
+			set("/tuner1/channel", "auto:473000000") // watching programme 1
+			set("/tuner1/filter", "0x0000 0x0100-0x0102")
+			set("/tuner1/target", tgt)
+			time.Sleep(700 * time.Millisecond) // past the grace period
+
+			c, rc := e.open("/auto/v36.1")
+			if !evict {
+				if c != nil {
+					c.close()
+					t.Fatal("served although every tuner is held")
+				}
+				if rc.StatusCode != 503 {
+					t.Fatalf("status %d, want 503", rc.StatusCode)
+				}
+				return
+			}
+			if c == nil {
+				t.Fatalf("the scan did not give way: %d %v", rc.StatusCode, rc.Header)
+			}
+			defer c.close()
+			if r := rc.Header.Get("X-HDHomeRun-Resource"); r != "tuner0" {
+				t.Fatalf("took %q, want the scanning tuner0", r)
+			}
+			if an := analyze(t, c.read(t, 188*100)); an.ccErrors != 0 || !an.esProgs[1] {
+				t.Fatalf("viewer got %v (cc=%d) pids=%v", an.esProgs, an.ccErrors, an.pids)
+			}
+			// the one watching a programme is left alone
+			d, rd := e.open("/auto/v14.3")
+			if d != nil {
+				d.close()
+				t.Fatalf("a watched tuner was taken: %v", rd.Header)
+			}
+			if rd.StatusCode != 503 {
+				t.Fatalf("status %d, want 503", rd.StatusCode)
+			}
+		})
+	}
+}

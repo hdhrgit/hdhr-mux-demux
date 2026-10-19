@@ -353,9 +353,10 @@ type Sub struct {
 	once sync.Once
 
 	// guarded by st.fmu
-	mode    filterMode
-	pids    ts.PIDSet
-	program uint16
+	mode     filterMode
+	pids     ts.PIDSet
+	program  uint16
+	filterAt time.Time // when the filter was last set
 
 	filter atomic.Pointer[filterState]
 	active atomic.Bool // set once a consumer is attached; until then nothing is queued
@@ -424,6 +425,7 @@ func (s *Sub) SetFilter(set ts.PIDSet) {
 	s.st.fmu.Lock()
 	defer s.st.fmu.Unlock()
 	s.mode, s.pids, s.program = modePIDs, set, 0
+	s.filterAt = time.Now()
 	s.filter.Store(s.st.buildFilterLocked(s))
 	s.st.kickMask()
 }
@@ -849,4 +851,15 @@ func (h *Hub) CarryingChannel(number string) []AltCarrier {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Tuner < out[j].Tuner })
 	return out
+}
+
+// FilterAge is how long ago the client last set its PID filter (zero when it
+// never has).
+func (s *Sub) FilterAge() time.Duration {
+	s.st.fmu.Lock()
+	defer s.st.fmu.Unlock()
+	if s.filterAt.IsZero() {
+		return 0
+	}
+	return time.Since(s.filterAt)
 }

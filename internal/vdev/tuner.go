@@ -816,6 +816,7 @@ func (v *VTuner) adoptViewers() {
 	}
 	old, snd := v.sub, v.snd
 	v.sub, v.snd = v.httpSubs[0], nil
+	v.targetStr = "none" // a sender started later would take the viewer's data from it
 	v.httpOpened, v.httpUse, v.autoOwned = true, true, true
 	v.program, v.explicit, v.vchannel = 0, false, ""
 	v.lockkey, v.lockIP = 0, ""
@@ -1073,4 +1074,56 @@ func (v *VTuner) targetGone(s *sender) {
 	if cur {
 		v.releaseAll(true)
 	}
+}
+
+// scanGrace is how long a control client's filter must have completed no
+// programme before the client counts as scanning (see Config.ScanGrace).
+func (d *Device) scanGrace() time.Duration {
+	if d.cfg.ScanGrace > 0 {
+		return d.cfg.ScanGrace
+	}
+	return 10 * time.Second
+}
+
+// scanningLocked reports whether the tuner is held by a control client that is
+// only collecting tables: its PID filter has completed no programme for a while.
+// Nobody else may be on the tuner. v.mu must be held.
+func (v *VTuner) scanningLocked() bool {
+	sub := v.sub
+	return v.tuned && v.snd != nil && sub != nil && len(v.httpSubs) == 0 && v.vchannel == "" &&
+		sub.SelectsPIDs() && sub.FilterAge() >= v.d.scanGrace() && len(sub.WatchedProgramGroups()) == 0
+}
+
+func (v *VTuner) evictableScan() bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.scanningLocked()
+}
+
+// evictScan takes the tuner from a control client that is only scanning, so that
+// a viewer can have it: the stream and the lock go, the client finds its data
+// stopped and its lock lost, as when a real tuner is taken over. It reports
+// whether the tuner is free to be reserved.
+func (v *VTuner) evictScan() bool {
+	if !v.op.TryLock() {
+		return false
+	}
+	defer v.op.Unlock()
+	v.mu.Lock()
+	if !v.scanningLocked() {
+		v.mu.Unlock()
+		return false
+	}
+	freq, client := v.spec.Frequency, ""
+	if i := strings.Index(v.targetStr, "://"); i >= 0 {
+		client, _, _ = net.SplitHostPort(v.targetStr[i+3:])
+	}
+	v.mu.Unlock()
+	// the target goes too: a sender left behind would start again on the viewer's stream
+	v.releaseAll(true)
+	v.mu.Lock()
+	v.lockkey, v.lockIP = 0, ""
+	v.mu.Unlock()
+	log.Printf("tuner%d: guide scan of %d Hz by %s given up for a viewer", v.idx, freq, client)
+	return true
 }

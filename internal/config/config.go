@@ -72,6 +72,9 @@ type Config struct {
 	// session already open receives on another RF channel than the lineup lists (the
 	// same station via another antenna or feed) rides that session.
 	AutoJoinOtherLocations *bool `json:"auto_join_other_locations"`
+	// EvictScans (default true): an /auto/ request that finds every tuner busy takes one
+	// from a control client that only collects tables (tvheadend's idle guide scan).
+	EvictScans *bool `json:"evict_scans"`
 	// StreamTTL is the IP TTL of the video the multiplexer sends (HTTP streams, UDP/RTP
 	// targets), 3 by default like the devices, so that it does not travel beyond a
 	// couple of routers. Values above 8 are quietly reduced to 8; 0 means the default.
@@ -220,6 +223,10 @@ func Load(path string) (*Config, error) {
 	if c.AutoJoinOtherLocations == nil {
 		t := true
 		c.AutoJoinOtherLocations = &t
+	}
+	if c.EvictScans == nil {
+		t := true
+		c.EvictScans = &t
 	}
 	// The streams must not travel the internet at large (the devices push a lot of
 	// bandwidth, which would make a fine weapon): 3 unless set, never more than 8.

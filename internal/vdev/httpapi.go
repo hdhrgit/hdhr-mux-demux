@@ -553,6 +553,49 @@ func (d *Device) openAuto(ctx context.Context, rq streamReq, start func(*VTuner)
 			return nil, nil, err
 		}
 	}
+	if d.cfg.EvictScans && !errors.Is(lastErr, upstream.ErrNoTuner) {
+		if v, sub, err := d.evictScanAndStart(rq, start); err == nil {
+			return v, sub, nil
+		}
+	}
+	return nil, nil, lastErr
+}
+
+// evictScanAndStart is the last resort of /auto/ when every tuner is busy: a tuner
+// held by a control client that only collects tables (tvheadend's idle guide
+// scan) is given up for the viewer. Real viewing, direct or not, is never touched.
+func (d *Device) evictScanAndStart(rq streamReq, start func(*VTuner) (*VTuner, *hub.Sub, error)) (*VTuner, *hub.Sub, error) {
+	pool := d.hub.Pool()
+	type cand struct {
+		v     *VTuner
+		score int
+	}
+	var cands []cand
+	for _, v := range d.tuners {
+		if !v.pinned() || !v.evictableScan() {
+			continue
+		}
+		class, ok := pool.Suitability(v.idx, rq.service || d.hub.IsService(rq.spec.Frequency))
+		if !ok {
+			continue
+		}
+		cands = append(cands, cand{v, class})
+	}
+	sort.SliceStable(cands, func(i, j int) bool { return cands[i].score < cands[j].score })
+	lastErr := errBusyAll
+	for _, c := range cands {
+		if !c.v.evictScan() || !c.v.tryReserve() {
+			continue
+		}
+		v, sub, err := start(c.v)
+		if err == nil {
+			return v, sub, nil
+		}
+		if !errors.Is(err, upstream.ErrTunerBusy) && !errors.Is(err, upstream.ErrTunerUnsuitable) {
+			return nil, nil, err
+		}
+		lastErr = err
+	}
 	return nil, nil, lastErr
 }
 

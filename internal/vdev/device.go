@@ -78,6 +78,13 @@ type Config struct {
 	// AutoJoinOtherLocations lets an /auto/ request ride a session that carries the
 	// channel on another RF channel than the lineup lists.
 	AutoJoinOtherLocations bool
+	// EvictScans lets an /auto/ request that finds every tuner busy take one from a
+	// control client that is only collecting tables (a guide or channel scan).
+	EvictScans bool
+	// ScanGrace is how long a control client has to hold a filter that completes no
+	// programme before it counts as scanning (default 10 s): a client about to
+	// watch sets such a filter too, for a moment, while it reads the PMTs.
+	ScanGrace time.Duration
 	// StreamTTL is the IP TTL of the streams sent to clients (0 = 3; never more than 8).
 	StreamTTL int
 	// ScanPollInterval, if set, replaces the interval at which a device scan is polled.
