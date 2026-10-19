@@ -266,14 +266,115 @@ function renderLineup(root) {
   load();
 }
 
+/* ---------- settings page ---------- */
+const GROUPS = ['General', 'Network', 'Devices', 'Streaming', 'Lineup', 'Guide', 'Diagnostics'];
+let settingsState = null;
+
+function ctl(f, v, locked, env) {
+  const id = 'f-' + f.key.replace(/\W/g, '_'), dis = locked || env ? 'disabled' : '';
+  const ph = f.placeholder ? `placeholder="${esc(f.placeholder)}"` : '';
+  if (f.type === 'bool') return `<label class="switch"><input type="checkbox" id="${id}" data-key="${esc(f.key)}" ${v ? 'checked' : ''} ${dis}><span class="slider"></span></label>`;
+  if (f.type === 'choice') return `<select id="${id}" data-key="${esc(f.key)}" ${dis}>${f.choices.map((c) => `<option ${c === v ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>`;
+  if (f.type === 'list') return `<textarea id="${id}" data-key="${esc(f.key)}" rows="${Math.max(2, Math.min(6, (v || []).length + 1))}" ${ph} ${dis} spellcheck="false">${esc((v || []).join('\n'))}</textarea>`;
+  const shown = f.type === 'int' && (v === 0 || v === undefined) ? '' : (v ?? '');
+  return `<input id="${id}" data-key="${esc(f.key)}" type="text" value="${esc(shown)}" ${ph} ${dis} spellcheck="false" autocomplete="off">`;
+}
+function fieldHTML(f, st) {
+  const v = st.values[f.key], saved = st.saved.includes(f.key), env = st.env[f.key];
+  return `<div class="field ${f.type === 'bool' ? 'inline' : ''}" data-field="${esc(f.key)}">
+    <div class="field-text"><label for="f-${esc(f.key.replace(/\W/g, '_'))}">${esc(f.label)}</label>
+      <p>${esc(f.help)}</p>
+      ${env ? `<p class="note">Set by the environment variable <code>${esc(env)}</code>, which overrides this page.</p>` : ''}
+      ${saved && !st.locked ? '<p class="note saved">Saved from this page. <button type="button" class="link" data-reset>Use the default again</button></p>' : ''}</div>
+    <div class="field-ctl">${ctl(f, v, st.locked, env)}</div></div>`;
+}
+function readControl(el, f) {
+  if (f.type === 'bool') return el.checked;
+  if (f.type === 'list') return el.value.split('\\n').map((x) => x.trim()).filter(Boolean);
+  return el.value.trim();
+}
+function sameValue(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+
+function renderSettings(root) {
+  root.innerHTML = '<div class="page-title"><h1>Settings</h1><p>Change how the multiplexer runs without editing files.</p></div><div id="settings-body"><div class="skeleton"></div></div>';
+  const load = async () => {
+    try { settingsState = await getJSON('/ui/api/settings'); setConn(true); drawSettings(); } catch (e) {
+      setConn(false);
+      $('#settings-body').innerHTML = '<div class="card empty"><h3>Settings are not available</h3>This setup does not offer them, or this address is not on a private network.</div>';
+    }
+  };
+  load();
+}
+
+function drawSettings() {
+  const st = settingsState, body = $('#settings-body');
+  const fields = Object.fromEntries(st.schema.map((f) => [f.key, f]));
+  const sto = st.storage;
+  const banner = sto.warning ? `<div class="banner warn" role="alert"><b>${sto.kind === 'container-layer' || sto.kind === 'memory' ? 'Nothing here is kept' : 'Storage is not permanent'}</b><p>${esc(sto.warning)}</p></div>` : '';
+  const lock = st.locked ? '<div class="banner"><b>Settings are locked</b><p>settings_locked is set in the config file, so this page only shows the values.</p></div>' : '';
+  body.innerHTML = banner + lock + GROUPS.map((g) => {
+    const fs = st.schema.filter((f) => f.group === g);
+    return fs.length ? `<section class="card settings-group"><h2>${g}</h2>${fs.map((f) => fieldHTML(f, st)).join('')}</section>` : '';
+  }).join('') + `<div class="card info-card"><h2>Where things are</h2><dl>
+      <dt>State directory</dt><dd><code>${esc(sto.path)}</code> <span class="tag">${esc({ disk: 'on disk', mounted: 'mapped', 'anonymous-volume': 'anonymous volume', 'container-layer': 'inside the container', memory: 'memory' }[sto.kind] || sto.kind)}</span>${sto.writable ? '' : ' <span class="tag bad">not writable</span>'}</dd>
+      <dt>Config file</dt><dd><code>${esc(st.configPath || '(none: defaults and environment)')}</code></dd>
+      <dt>Saved from this page</dt><dd><code>${esc(st.settingsPath)}</code></dd></dl></div>
+    <div class="savebar" id="savebar" hidden><span id="save-msg"></span><span class="grow"></span><button type="button" class="btn" id="discard">Discard</button><button type="button" class="btn primary" id="save">Save</button></div>`;
+  const pending = {};
+  const update = () => {
+    const n = Object.keys(pending).length;
+    $('#savebar').hidden = n === 0 && !body.dataset.restart;
+    if (!body.dataset.restart) { $('#save-msg').textContent = n ? n + ' change' + (n === 1 ? '' : 's') + ' not saved yet' : ''; $('#save').hidden = false; $('#discard').hidden = false; }
+  };
+  body.addEventListener('input', (e) => {
+    const el = e.target.closest('[data-key]'); if (!el) return;
+    const f = fields[el.dataset.key], v = readControl(el, f), orig = st.values[f.key];
+    const same = f.type === 'int' ? String(v === '' ? 0 : v) === String(orig ?? 0) : sameValue(v, f.type === 'list' ? (orig || []) : orig);
+    if (same) delete pending[f.key]; else pending[f.key] = v === '' && f.type !== 'text' ? null : v;
+    update();
+  });
+  body.addEventListener('click', async (e) => {
+    const reset = e.target.closest('[data-reset]');
+    if (reset) { pending[reset.closest('.field').dataset.field] = null; reset.closest('.note').textContent = 'Will use the default after saving.'; update(); return; }
+    if (e.target.id === 'discard') { drawSettings(); return; }
+    if (e.target.id === 'restart') { restartNow(); return; }
+    if (e.target.id !== 'save') return;
+    $('#save').disabled = true;
+    try {
+      const r = await fetch('/ui/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'hdhr-mux-ui' }, body: JSON.stringify({ changes: pending }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'saving failed (' + r.status + ')');
+      body.dataset.restart = '1';
+      $('#savebar').hidden = false; $('#savebar').classList.add('done');
+      $('#save-msg').innerHTML = 'Saved. The changes apply when the multiplexer restarts.';
+      $('#save').remove(); $('#discard').remove();
+      $('#savebar').insertAdjacentHTML('beforeend', st.restartable ? '<button type="button" class="btn primary" id="restart">Restart now</button>' : '<span class="muted">Restart the container or service to apply them.</span>');
+    } catch (err) { $('#save').disabled = false; $('#save-msg').textContent = err.message; $('#savebar').classList.add('error'); update(); $('#savebar').hidden = false; }
+  });
+}
+
+async function restartNow() {
+  if (!confirm('The multiplexer will stop and Docker or systemd must start it again. Viewers are disconnected for a few seconds. Continue?')) return;
+  $('#save-msg').textContent = 'Restarting…';
+  $('#restart').disabled = true;
+  try { await fetch('/ui/api/restart', { method: 'POST', headers: { 'X-Requested-With': 'hdhr-mux-ui' } }); } catch (e) { /* it may already be gone */ }
+  const until = Date.now() + 90000;
+  await new Promise((r) => setTimeout(r, 2500));
+  while (Date.now() < until) {
+    try { const r = await fetch('/ui/api/activity', { cache: 'no-store' }); if (r.ok) { location.reload(); return; } } catch (e) { /* not back yet */ }
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  $('#save-msg').textContent = 'It has not come back. If it runs in Docker, check that it was started with --restart unless-stopped.';
+}
+
 /* ---------- router ---------- */
-const PAGES = { activity: renderActivity, lineup: renderLineup };
+const PAGES = { activity: renderActivity, lineup: renderLineup, settings: renderSettings };
 function route() {
   stopped = true; clearTimeout(timer);
   const name = (location.hash.replace(/^#\/?/, '') || 'activity').split('/')[0];
   const page = PAGES[name] ? name : 'activity';
   $$('.tabs a').forEach((a) => { if (a.dataset.tab === page) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
-  document.title = `${page === 'activity' ? 'Activity' : 'Lineup'} · ${$('.brand-text b').textContent}`;
+  document.title = `${{ activity: 'Activity', lineup: 'Lineup', settings: 'Settings' }[page]} · ${$('.brand-text b').textContent}`;
   stopped = false;
   PAGES[page]($('#app'));
 }

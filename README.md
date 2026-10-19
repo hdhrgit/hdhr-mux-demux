@@ -241,6 +241,20 @@ Broadcast discovery (both the multiplexer finding the devices and clients
 finding the multiplexer) needs `--network host`; with a bridge network list the
 devices in `upstream.devices` and add the multiplexer to the DVR by address.
 
+```
+docker run -d --name hdhr-mux --network host --restart unless-stopped \
+  -v hdhr-mux-state:/var/lib/hdhr-mux \
+  -v /path/to/etc:/etc/hdhr-mux:ro \
+  hdhr-mux -config /etc/hdhr-mux/config.json
+```
+
+**Give the container a state directory.** The lineup, programme guide, the stable numbering of the
+tuners and the settings saved from the web interface live in `state_dir` (`/var/lib/hdhr-mux` in the
+image). Inside a container that directory disappears with the container unless you map a
+directory or a named volume to it (`-v` above). The web interface's Settings page checks and warns
+when it is not mapped (or is only an anonymous volume). `--restart unless-stopped` lets the
+Settings page's Restart button work, and brings the multiplexer back after a reboot.
+
 ### Configuration
 
 See [config.example.json](config.example.json). Notable keys:
@@ -279,6 +293,27 @@ See [config.example.json](config.example.json). Notable keys:
 * `auto_join_other_locations` (true): the same station can be received on more than one RF channel (a second antenna or feed, a translator) while a device's lineup lists only one of them. An `/auto/` request for a channel that a session already open carries on another RF channel (found from that multiplex's own channel table) rides that session instead of taking a tuner. Never opens a tuner somewhere other than the lineup's place; set to `false` to always use the lineup's.
 * `evict_scans` (true): when every tuner is busy, an `/auto/` request takes one from a control client that is only collecting tables (tvheadend's idle guide scan): its PID filter has completed no programme for 10 s. The scanner finds its data stopped and its lock gone. A client that is watching a programme, or has a viewer on its tuner, is never touched. Set to `false` to leave direct clients' tuners alone even then.
 * `stream_ttl` (3, at most 8): the IP TTL of the video the multiplexer sends (HTTP streams and UDP/RTP targets). Real devices send their streams with a TTL of 3 so they cannot travel beyond a couple of routers; the multiplexer does the same, so a client has to be within two router hops of it. Larger values are quietly cut to 8 and `0` means the default: a device pushes a lot of bandwidth and must not be usable from afar, so use a VPN for remote viewing. For the same reason a UDP/RTP `target` (a control request cannot be authenticated, and its source can be forged) must be an address on a private IPv4 network (RFC 1918), this machine or link-local; any other target is refused.
+
+### Settings page (`/ui/#/settings`)
+
+The common settings can be changed from the web interface instead of editing JSON: name, device ID,
+listen addresses, SSDP, which devices and tuners to use, streaming and guide timing, diagnostics.
+Changes are saved to `settings.json` in the state directory, in the same shape as the config file, and
+laid over it: **config file < `settings.json` < environment variables** (a setting an environment
+variable controls is shown as such and cannot be edited on the page). The config file itself is never
+written, so it may be read-only or managed by something else. Settings take effect after a restart
+(the page has a Restart button: the multiplexer exits with status 3 and relies on Docker or systemd to
+start it again).
+
+The page also shows where the state directory is and warns when it will not survive (see Docker above).
+
+Because it can reconfigure the multiplexer, saving is only accepted from private-network, loopback or
+link-local addresses, requires a custom request header (so another web site cannot send it from a
+browser on your network) and can be switched off with `"settings_locked": true` in the config file.
+There is no password: do not expose the web port to the internet.
+
+If a saved setting stops the multiplexer from starting, delete `settings.json` from the state directory
+or start with `-ignore-settings`.
 
 ### Web interface (`/ui/`)
 

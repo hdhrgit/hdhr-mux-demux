@@ -15,8 +15,10 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"time"
 
+	"hdhrmux/internal/config"
 	"hdhrmux/internal/fakehdhr"
 	"hdhrmux/internal/guide"
 	"hdhrmux/internal/hdhrproto"
@@ -101,8 +103,15 @@ func main() {
 		}
 	}
 	lu.Replace(entries)
+	// a throw-away config so the settings page works
+	tmp, _ := os.MkdirTemp("", "uidemo")
+	defer os.RemoveAll(tmp)
+	cfgPath := filepath.Join(tmp, "config.json")
+	os.WriteFile(cfgPath, []byte(`{"state_dir":"`+tmp+`","friendly_name":"HDHomeRun Mux (demo)"}`), 0o644)
+	cfg, _ := config.Load(cfgPath)
 	dev, err := vdev.New(vdev.Config{DeviceID: hdhrproto.MakeDeviceID(0x10900000), FriendlyName: "HDHomeRun Mux (demo)", Tuners: pool.TotalTuners(),
-		HTTPAddr: *httpAddr, StreamAddr: *streamAddr, ControlAddr: "127.0.0.1:0"}, h, lu)
+		HTTPAddr: *httpAddr, StreamAddr: *streamAddr, ControlAddr: "127.0.0.1:0",
+		StateDir: tmp, Settings: config.NewManager(cfgPath, cfg), Restart: func() { log.Printf("restart requested (the demo just ignores it)") }}, h, lu)
 	if err != nil {
 		log.Fatal(err)
 	}

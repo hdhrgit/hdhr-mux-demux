@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 )
 
 func load(t *testing.T, json string) *Config {
@@ -78,5 +80,105 @@ func TestSSDPATSC3Default(t *testing.T) {
 	}
 	if !*load(t, `{"ssdp_atsc3": true}`).SSDPATSC3 {
 		t.Fatal("ssdp_atsc3: true ignored")
+	}
+}
+
+func TestSettingsOverlayAndSave(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "c.json")
+	state := filepath.Join(dir, "state")
+	os.WriteFile(cfgPath, []byte(`{"state_dir":"`+state+`","friendly_name":"From File","guide":{"refresh":"6h","hold":"30s"}}`), 0o644)
+	c, err := Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(cfgPath, c)
+	if v := m.Values(); v["friendly_name"] != "From File" || v["guide.refresh"] != "6h0m0s" || v["upstream.mask"] != true || v["idle_release"] != "" {
+		t.Fatalf("values %v", v)
+	}
+
+	// save: becomes visible in settings.json, config file untouched, merged over the file
+	if err := m.Save(map[string]any{"friendly_name": "Web Name", "guide.parallel": "5", "upstream.tuners": "10A22E9C/0-1\n10813750", "ssdp_ipv6": true, "linger": "9s"}); err != nil {
+		t.Fatal(err)
+	}
+	c2, err := Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c2.FriendlyName != "Web Name" || c2.Guide.Parallel != 5 || !*c2.SSDPIPv6 || c2.Linger != Duration(9*time.Second) ||
+		!reflect.DeepEqual(c2.Upstream.Tuners, []string{"10A22E9C/0-1", "10813750"}) {
+		t.Fatalf("overlay not applied: %+v", c2)
+	}
+	if c2.Guide.Hold != Duration(30*time.Second) || c2.Guide.Refresh != Duration(6*time.Hour) {
+		t.Fatalf("file values lost under the overlay: %+v", c2.Guide)
+	}
+	if b, _ := os.ReadFile(cfgPath); !strings.Contains(string(b), "From File") || strings.Contains(string(b), "Web Name") {
+		t.Fatalf("config file was modified: %s", b)
+	}
+	if got := NewManager(cfgPath, c2).Saved(); len(got) != 5 {
+		t.Fatalf("saved keys %v", got)
+	}
+
+	// resetting a key brings back the file's value
+	if err := NewManager(cfgPath, c2).Save(map[string]any{"friendly_name": nil}); err != nil {
+		t.Fatal(err)
+	}
+	if c3, _ := Load(cfgPath); c3.FriendlyName != "From File" {
+		t.Fatalf("reset: %q", c3.FriendlyName)
+	}
+
+	// invalid input is refused and nothing changes
+	before, _ := os.ReadFile(filepath.Join(state, "settings.json"))
+	for name, ch := range map[string]map[string]any{
+		"bad duration": {"linger": "soon"}, "bad tuner": {"upstream.tuners": "nonsense"}, "bad id": {"device_id": "12345678"},
+		"bad listen": {"http_listen": "eighty"}, "bad choice": {"upstream.mode": "carrier-pigeon"}, "unknown": {"no.such": 1},
+		"negative": {"guide.parallel": -2}, "not a bool": {"ssdp": "yes"},
+	} {
+		if err := NewManager(cfgPath, c2).Save(ch); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	if after, _ := os.ReadFile(filepath.Join(state, "settings.json")); string(after) != string(before) {
+		t.Errorf("settings.json changed by refused saves:\n%s\n%s", before, after)
+	}
+
+	// the way out of a bad saved setting
+	os.WriteFile(filepath.Join(state, "settings.json"), []byte(`{"friendly_name":"Saved"}`), 0o644)
+	if c4, _ := LoadWithoutSettings(cfgPath); c4.FriendlyName != "From File" {
+		t.Errorf("LoadWithoutSettings used settings.json: %q", c4.FriendlyName)
+	}
+	// environment wins over saved settings
+	t.Setenv("HDHOMERUN_DISCOVERABLE", "false")
+	if c5, _ := Load(cfgPath); *c5.Discoverable {
+		t.Error("environment did not override")
+	}
+	if got := NewManager(cfgPath, c2).OverriddenByEnv(); got["discoverable"] != "HDHOMERUN_DISCOVERABLE" {
+		t.Errorf("overridden %v", got)
+	}
+}
+
+func TestClassifyStorage(t *testing.T) {
+	root := "100 1 0:50 / / rw - overlay overlay rw\n"
+	bind := root + "300 100 259:2 /home/debian/hdhr-mux-run/state /var/lib/hdhr-mux rw - ext4 /dev/nvme0n1p2 rw\n"
+	anon := root + "301 100 259:2 /var/lib/docker/volumes/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/_data /var/lib/hdhr-mux rw - ext4 /dev/sda rw\n"
+	named := root + "302 100 259:2 /var/lib/docker/volumes/hdhr-mux-state/_data /var/lib/hdhr-mux rw - ext4 /dev/sda rw\n"
+	mem := root + "303 100 0:60 / /var/lib/hdhr-mux rw - tmpfs tmpfs rw\n"
+	for name, c := range map[string]struct {
+		info, kind string
+		container  bool
+		warn       bool
+	}{
+		"bind mount":         {bind, "mounted", true, false},
+		"named volume":       {named, "mounted", true, false},
+		"anonymous volume":   {anon, "anonymous-volume", true, true},
+		"container layer":    {root, "container-layer", true, true},
+		"tmpfs":              {mem, "memory", true, true},
+		"plain host":         {root, "disk", false, false},
+		"plain host on disk": {bind, "disk", false, false},
+	} {
+		kind, warn := classifyStorage(c.info, "/var/lib/hdhr-mux", c.container)
+		if kind != c.kind || (warn != "") != c.warn {
+			t.Errorf("%s: kind %q warning %q, want %q (warning %v)", name, kind, warn, c.kind, c.warn)
+		}
 	}
 }

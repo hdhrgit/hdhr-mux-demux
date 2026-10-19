@@ -2,9 +2,12 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -51,11 +54,15 @@ type Config struct {
 	// Discoverable (default true) lets clients find the multiplexer: it answers
 	// wildcard UDP discovery and announces itself over SSDP. When false it is
 	// only found by those who know its address or device ID.
-	Discoverable *bool  `json:"discoverable"`
-	LogRequests  bool   `json:"log_requests"` // log every client request (diagnostics)
-	PprofListen  string `json:"pprof_listen"` // e.g. "127.0.0.1:6060": Go profiling endpoint (off by default)
+	Discoverable *bool `json:"discoverable"`
+	// SettingsLocked refuses every change from the web interface's settings page.
+	SettingsLocked bool   `json:"settings_locked"`
+	LogRequests    bool   `json:"log_requests"` // log every client request (diagnostics)
+	PprofListen    string `json:"pprof_listen"` // e.g. "127.0.0.1:6060": Go profiling endpoint (off by default)
 
 	StateDir string `json:"state_dir"` // lineup.json and device id live here
+	// Path is the config file this was loaded from (not part of the file).
+	Path string `json:"-"`
 
 	Upstream Upstream `json:"upstream"`
 	Lineup   Lineup   `json:"lineup"`
@@ -166,19 +173,53 @@ func applyEnv(c *Config) {
 	}
 }
 
-func Load(path string) (*Config, error) {
+// Load reads the config file (if any), lays the settings saved from the web
+// interface over it, then the environment, and fills in defaults.
+func Load(path string) (*Config, error) { return loadConfig(path, nil, true) }
+
+// LoadWithoutSettings is Load without settings.json: the way out when a saved
+// setting stops the multiplexer from starting.
+func LoadWithoutSettings(path string) (*Config, error) { return loadConfig(path, []byte("{}"), true) }
+
+// loadConfig builds the configuration. overlay, if not nil, replaces settings.json.
+func loadConfig(path string, overlay []byte, env bool) (*Config, error) {
 	c := &Config{}
+	base := map[string]any{}
 	if path != "" {
 		b, err := os.ReadFile(path)
 		if err != nil {
 			return nil, err
 		}
-		dec := json.NewDecoder(strings.NewReader(string(b)))
+		if err := json.Unmarshal(b, &base); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+	}
+	if overlay == nil {
+		stateDir, _ := base["state_dir"].(string)
+		if stateDir == "" {
+			stateDir = "."
+		}
+		var err error
+		if overlay, err = os.ReadFile(filepath.Join(stateDir, settingsFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+	}
+	if len(bytes.TrimSpace(overlay)) > 0 {
+		ov := map[string]any{}
+		if err := json.Unmarshal(overlay, &ov); err != nil {
+			return nil, fmt.Errorf("settings.json: %w", err)
+		}
+		deepMerge(base, ov)
+	}
+	if len(base) > 0 {
+		b, _ := json.Marshal(base)
+		dec := json.NewDecoder(bytes.NewReader(b))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(c); err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
 	}
+	c.Path = path
 	if c.StateDir == "" {
 		c.StateDir = "."
 	}
@@ -235,7 +276,9 @@ func Load(path string) (*Config, error) {
 		n = min(*c.StreamTTL, 8)
 	}
 	c.StreamTTL = &n
-	applyEnv(c)
+	if env {
+		applyEnv(c)
+	}
 	if c.StreamListen == "" {
 		c.StreamListen = ":5004"
 	}
