@@ -175,7 +175,8 @@ function updateActivity(a) {
     statCard('To viewers', mbps(S.txBps), 'Mbps', S.rxBps > 0 && S.txBps > S.rxBps * 1.1 ? `${(S.txBps / S.rxBps).toFixed(1)}× shared` : 'delivered') +
     statCard('Devices', S.physicalOnline, `/ ${S.physical}`, S.physicalOnline === S.physical ? 'all tuners online' : `${S.physical - S.physicalOnline} offline`));
 
-  const active = a.tuners.filter((t) => t.state !== 'idle');
+  // fewest viewers first (then by tuner): cards in a row are then about as tall as each other, with no gaps under the short ones
+  const active = a.tuners.filter((t) => t.state !== 'idle').sort((x, y) => (x.viewers || []).length - (y.viewers || []).length || x.index - y.index);
   const idle = a.tuners.filter((t) => t.state === 'idle');
   $('#n-active').textContent = active.length;
   patch($('#tuners'), active.length ? active.map((t) => tunerHTML(t, nowSec)).join('') :
