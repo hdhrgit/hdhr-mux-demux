@@ -2681,3 +2681,49 @@ func TestTargetsMustBePrivate(t *testing.T) {
 	}
 	ctl.Set("/tuner0/target", "none", 0)
 }
+
+// A device that receives a station on another frequency than the lineup has it
+// (another antenna, a cable feed): the Activity page still names what a
+// PID-selecting client watches, from the multiplex's own channel table, and calls
+// it a scan only when the client's PIDs complete no programme.
+func TestActivityNamesProgrammesTheLineupDoesNotPlaceHere(t *testing.T) {
+	e := setup(t, []int{2}, 2, nil)
+	moved := []lineup.Entry{
+		{GuideNumber: "7.1", GuideName: "ALPHA", Frequency: 999000000, Program: 1},
+		{GuideNumber: "7.2", GuideName: "BETA", Frequency: 999000000, Program: 2},
+	}
+	e.lu.Replace(moved) // the channels are not where tuner 0 is
+	ctl := hdhrproto.NewControl(e.ctl)
+	defer ctl.Close()
+	rx, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rx.Close()
+	set := func(name, val string) {
+		t.Helper()
+		if _, err := ctl.Set(name, val, 0); err != nil {
+			t.Fatalf("set %s %s: %v", name, val, err)
+		}
+	}
+	set("/tuner0/channel", "auto:177000000")
+	set("/tuner0/filter", "0x0000 0x1ffb 0x0100-0x0102 0x0110-0x0112")
+	set("/tuner0/target", "udp://"+rx.LocalAddr().String())
+	var a struct {
+		Tuners []struct {
+			Viewers []struct {
+				Channel string
+				Scan    bool
+			}
+		}
+	}
+	waitFor(t, "the programmes named from the stream", 8*time.Second, func() bool {
+		a.Tuners = nil
+		getJSON(t, e.api+"/ui/api/activity", &a)
+		if len(a.Tuners) == 0 || len(a.Tuners[0].Viewers) != 2 {
+			return false
+		}
+		v0, v1 := a.Tuners[0].Viewers[0], a.Tuners[0].Viewers[1]
+		return !v0.Scan && !v1.Scan && v0.Channel == "7.1" && v1.Channel == "7.2"
+	})
+}

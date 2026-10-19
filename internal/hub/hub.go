@@ -798,3 +798,16 @@ func (h *Hub) Pool() *upstream.Pool { return h.pool }
 
 // Buffered returns how many batches are queued for the consumer.
 func (s *Sub) Buffered() int { return len(s.C) }
+
+// ProgramChannel names a programme of the stream from the multiplex's own channel
+// table (PSIP), for streams whose programmes the lineup does not place on this
+// frequency: its guide number ("2.1") and short name.
+func (s *Sub) ProgramChannel(program uint16) (number, name string, ok bool) {
+	s.st.fmu.Lock()
+	defer s.st.fmu.Unlock()
+	ch, ok := s.st.vct[program]
+	if !ok || ch.GuideName == "" {
+		return "", "", false
+	}
+	return ch.GuideName, ch.Name, true
+}

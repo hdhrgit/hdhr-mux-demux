@@ -71,6 +71,7 @@ type stream struct {
 	patVer   byte
 	programs map[uint16]uint16 // program -> PMT PID
 	pmts     map[uint16]*ts.PMT
+	vct      map[uint16]psip.Channel      // the multiplex's own channel table by programme number (fmu)
 	sections map[uint16]*ts.SectionReader // reader goroutine only
 	lastSec  map[uint16][]byte            // last PAT/PMT section seen per PID, to skip repeats (reader goroutine only)
 	isPSI    [ts.PIDMax + 1]bool          // reader goroutine only
@@ -238,7 +239,15 @@ func (st *stream) publishGuide(force bool) {
 	}
 	st.lastGuide = time.Now()
 	if st.collector.Changed() {
-		st.h.publishGuide(st.collector.Snapshot())
+		snap := st.collector.Snapshot()
+		vct := map[uint16]psip.Channel{}
+		for _, ch := range snap.Channels {
+			vct[ch.Program] = ch
+		}
+		st.fmu.Lock()
+		st.vct = vct
+		st.fmu.Unlock()
+		st.h.publishGuide(snap)
 	}
 }
 

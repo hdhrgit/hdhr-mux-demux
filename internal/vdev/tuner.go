@@ -754,8 +754,15 @@ func (v *VTuner) inferredChannels(sub *hub.Sub, spec chanmap.Spec) [][]string {
 	for _, g := range sub.WatchedProgramGroups() {
 		var nums []string
 		for _, p := range g {
+			// the lineup says where its channels are; a device that receives a station
+			// on another frequency (another antenna) is not in it, then the multiplex's
+			// own channel table names the programme, and failing that its number.
 			if num, _, ok := v.d.lineup.ProgramName(spec.Frequency, p); ok {
 				nums = append(nums, num)
+			} else if num, _, ok := sub.ProgramChannel(p); ok {
+				nums = append(nums, num)
+			} else {
+				nums = append(nums, fmt.Sprintf("program %d", p))
 			}
 		}
 		if len(nums) > 0 {
