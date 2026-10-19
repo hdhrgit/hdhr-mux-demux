@@ -157,6 +157,7 @@ type uiActivity struct {
 	Tuners   []uiTuner         `json:"tuners"`
 	Streams  []uiStream        `json:"streams"`
 	Counters map[string]uint64 `json:"counters"`
+	System   uiSystem          `json:"system"`
 }
 
 // entryFor finds the lineup entry behind what a client asked for: a guide
@@ -370,6 +371,7 @@ func (d *Device) activity() uiActivity {
 		a.Streams = append(a.Streams, uiStream{Tuner: s.TunerID, PhysURL: d.physURL(s.TunerID), Frequency: s.Spec.Frequency, Viewers: s.Subs, RxBPS: s.RxBPS, Background: s.Background, Lingering: s.Lingering})
 		a.Summary.RxBPS += s.RxBPS
 	}
+	a.System = d.system()
 	hs := d.hub.Stats()
 	a.Counters = map[string]uint64{
 		"streamsOpened": hs.StreamsOpened, "failovers": hs.Failovers, "filterUpdates": hs.MaskUpdates,

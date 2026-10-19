@@ -188,6 +188,17 @@ function updateActivity(a) {
   patch($('#bg-wrap'), bg.length ? `<div class="section-title">Behind the scenes <span class="count">${bg.length}</span></div>
     <div class="bg-list">${bg.map((s) => `<div class="card bg-item"><span class="dot ${s.background ? 'on' : ''}"></span><div><b>${s.background ? 'Collecting the guide' : 'Held for a quick return'}</b>
       <small>${phys(s.tuner, s.physicalUrl)} · ${mhz(s.frequency)} · ${(s.rxBps / 1e6).toFixed(1)} Mbps</small></div></div>`).join('')}</div>` : '');
+  const sy = a.system;
+  if (sy) {
+    patch($('#warn-wrap'), (sy.warnings || []).map((w) => `<div class="banner warn" role="status"><b>Heads up</b><p>${esc(w)}</p></div>`).join(''));
+    const mb = (n) => (n / 1048576).toFixed(0);
+    patch($('#sys-wrap'), `<div class="section-title">This machine</div><div class="cards sys">` +
+      statCard('CPU', sy.cpuPercent.toFixed(0), '%', `of one core, last minute · ${sy.cores} core${sy.cores === 1 ? '' : 's'}`) +
+      statCard('Memory', mb(sy.rssBytes), 'MB', sy.memLimitBytes ? `of ${mb(sy.memLimitBytes)} MB allowed` : 'resident') +
+      (sy.load1 || sy.load5 ? statCard('Load', sy.load1.toFixed(2), '', `5 min ${sy.load5.toFixed(2)}`) : '') +
+      (sy.tempC ? statCard('Temperature', sy.tempC.toFixed(0), '°C', sy.throttled ? 'throttled or under-voltage' : 'CPU') : '') +
+      statCard('Process', sy.goroutines, 'goroutines', `${sy.openFds} open files`) + '</div>');
+  }
   const c = a.counters;
   patch($('#counters'), `<span><b>${c.streamsOpened}</b> tunings</span><span><b>${c.failovers}</b> failovers</span><span><b>${c.filterUpdates}</b> filter updates</span>` +
     `<span><b>${c.reclaims}</b> idle tuners reclaimed</span><span><b>${c.droppedBatches}</b> dropped batches</span>`);
@@ -196,8 +207,9 @@ function updateActivity(a) {
 function renderActivity(root) {
   root.innerHTML = `<div class="page-title"><h1>Activity</h1><p>Who is watching what, right now.</p></div>
     <div class="cards" id="stats">${'<div class="skeleton"></div>'.repeat(5)}</div>
+    <div id="warn-wrap"></div>
     <div class="section-title">Active tuners <span class="count" id="n-active">–</span></div>
-    <div class="tuners" id="tuners"></div><div id="idle-wrap"></div><div id="bg-wrap"></div><div class="counters" id="counters"></div>`;
+    <div class="tuners" id="tuners"></div><div id="idle-wrap"></div><div id="bg-wrap"></div><div class="counters" id="counters"></div><div id="sys-wrap"></div>`;
   const tick = async () => {
     clearTimeout(timer);
     if (stopped) return;

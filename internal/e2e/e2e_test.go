@@ -3191,3 +3191,20 @@ type syncLog struct {
 
 func (s *syncLog) Write(p []byte) (int, error) { s.mu.Lock(); defer s.mu.Unlock(); return s.b.Write(p) }
 func (s *syncLog) String() string              { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
+
+// The activity page says how the multiplexer itself is doing.
+func TestActivityReportsTheSystem(t *testing.T) {
+	e := setup(t, []int{1}, 1, nil)
+	var a struct {
+		System struct {
+			Cores      int
+			RSSBytes   uint64
+			Goroutines int
+			OpenFds    int
+		}
+	}
+	getJSON(t, e.api+"/ui/api/activity", &a)
+	if a.System.Cores < 1 || a.System.RSSBytes == 0 || a.System.Goroutines == 0 || a.System.OpenFds == 0 {
+		t.Errorf("system section %+v", a.System)
+	}
+}

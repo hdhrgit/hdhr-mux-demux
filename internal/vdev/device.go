@@ -174,6 +174,7 @@ func (c *Config) defaults() {
 
 type Device struct {
 	cfg    Config
+	sys    sysSampler
 	live   liveState
 	hub    *hub.Hub
 	lineup *lineup.Lineup
@@ -266,6 +267,8 @@ func (d *Device) Start() error {
 	go func() { defer d.wg.Done(); hdhrproto.ServeUDP(d.udpConn, d) }()
 	d.wg.Add(1)
 	go d.reaper()
+	d.wg.Add(1)
+	go d.sysLoop()
 	d.wg.Add(2)
 	go d.lineupLoop()
 	go d.guideLoop()
