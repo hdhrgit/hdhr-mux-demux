@@ -237,15 +237,15 @@ func TestSettingsCoverClientSharing(t *testing.T) {
 func TestZeroSwitchesThingsOff(t *testing.T) {
 	c := load(t, "")
 	if time.Duration(c.Linger) != 5*time.Second || time.Duration(c.Guide.Refresh) != time.Hour ||
-		time.Duration(c.Lineup.Refresh) != 10*time.Minute || time.Duration(c.Guide.StartDelay) != 90*time.Second || !c.Guide.Unlocked {
+		time.Duration(c.Lineup.Refresh) != 10*time.Minute || time.Duration(c.Guide.StartDelay) != 90*time.Second || !c.Guide.Unlocked || time.Duration(c.SignalSettle) != 2*time.Second {
 		t.Fatalf("defaults: linger %v guide %v lineup %v delay %v unlocked %v", c.Linger, c.Guide.Refresh, c.Lineup.Refresh, c.Guide.StartDelay, c.Guide.Unlocked)
 	}
 	for _, js := range []string{
-		`{"linger":"0","guide":{"refresh":"0","start_delay":"0"},"lineup":{"refresh":"0"}}`,
-		`{"linger":"-1s","guide":{"refresh":"-1s","start_delay":"-5s"},"lineup":{"refresh":"-1s"}}`,
+		`{"signal_settle":"0","linger":"0","guide":{"refresh":"0","start_delay":"0"},"lineup":{"refresh":"0"}}`,
+		`{"signal_settle":"-1s","linger":"-1s","guide":{"refresh":"-1s","start_delay":"-5s"},"lineup":{"refresh":"-1s"}}`,
 	} {
 		c := load(t, js)
-		if c.Linger != 0 || c.Guide.Refresh != 0 || c.Guide.StartDelay != 0 || c.Lineup.Refresh != 0 {
+		if c.Linger != 0 || c.Guide.Refresh != 0 || c.Guide.StartDelay != 0 || c.Lineup.Refresh != 0 || c.SignalSettle != 0 {
 			t.Errorf("%s: linger %v guide %v delay %v lineup %v, want all off", js, c.Linger, c.Guide.Refresh, c.Guide.StartDelay, c.Lineup.Refresh)
 		}
 	}

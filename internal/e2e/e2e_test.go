@@ -66,6 +66,8 @@ var (
 	testChannels []fakehdhr.Channel          // what the fake devices broadcast (nil = channels)
 	testMask     = false                     // ask the devices to send only the PIDs being watched
 	testModels   []string                    // device models by index (default: ATSC 3.0 capable)
+	testSEQRamp  time.Duration               // fake devices report a symbol quality of 0 this long after a tune
+	testSettle   time.Duration               // hub.SetSignalSettle
 )
 
 func model(i int) string {
@@ -80,7 +82,7 @@ func setup(t *testing.T, physTuners []int, virtual int, mod func(*vdev.Config)) 
 	e := &env{t: t}
 	var addrs []string
 	for i, n := range physTuners {
-		f, err := fakehdhr.Start(fakehdhr.Config{DeviceID: hdhrproto.MakeDeviceID(0x10200000 + uint32(i)<<8), Tuners: n, Channels: pick(testChannels, channels), Model: model(i)})
+		f, err := fakehdhr.Start(fakehdhr.Config{DeviceID: hdhrproto.MakeDeviceID(0x10200000 + uint32(i)<<8), Tuners: n, Channels: pick(testChannels, channels), Model: model(i), SEQRamp: testSEQRamp})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -110,6 +112,7 @@ func setup(t *testing.T, physTuners []int, virtual int, mod func(*vdev.Config)) 
 	}
 	e.hub = hub.New(pool, hub.Config{Linger: testLinger, ClientBuffer: testBuffer, Mask: testMask})
 	t.Cleanup(e.hub.Close)
+	e.hub.SetSignalSettle(testSettle)
 	e.lu, _ = lineup.Open("")
 	e.lu.Replace(testLineup)
 	cfg := vdev.Config{
@@ -3079,4 +3082,49 @@ func TestSettingsApplyWithoutRestart(t *testing.T) {
 		t.Fatalf("PUT: %v %v", err, r)
 	}
 	waitFor(t, "the tuner of the direct client is shared once the setting is on", 4*time.Second, func() bool { return resource() == "tuner0" })
+}
+
+// A tuner's symbol quality reads 0 for a moment after it locks. Channels DVR counts
+// every second of it as a signal error, so for signal_settle after a stream starts
+// a zero is shown as the last good reading; the activity page keeps the truth.
+func TestSignalQualityZeroIsHiddenAtStart(t *testing.T) {
+	for _, settle := range []time.Duration{2 * time.Second, 0} {
+		t.Run(fmt.Sprint("settle=", settle), func(t *testing.T) {
+			old1, old2 := testSEQRamp, testSettle
+			testSEQRamp, testSettle = 1500*time.Millisecond, settle
+			defer func() { testSEQRamp, testSettle = old1, old2 }()
+			e := setup(t, []int{2}, 2, nil)
+			c, rc := e.open("/auto/v7.1")
+			if c == nil {
+				t.Fatalf("refused: %d", rc.StatusCode)
+			}
+			defer c.close()
+			res := rc.Header.Get("X-HDHomeRun-Resource")
+			ctl := hdhrproto.NewControl(e.ctl)
+			defer ctl.Close()
+			zeroSeen, readings := 0, 0
+			for i := 0; i < 12; i++ { // the first 1.2 s, while the fake reports 0
+				st, err := ctl.Get("/" + res + "/status")
+				if err != nil {
+					t.Fatal(err)
+				}
+				readings++
+				if strings.Contains(st, "seq=0 ") {
+					zeroSeen++
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			if settle > 0 && zeroSeen != 0 {
+				t.Errorf("a client saw a symbol quality of 0 in %d of %d readings with signal_settle on", zeroSeen, readings)
+			}
+			if settle == 0 && zeroSeen == 0 {
+				t.Errorf("no zero readings at all with signal_settle off: the test is not testing anything")
+			}
+			time.Sleep(1500 * time.Millisecond)
+			st, _ := ctl.Get("/" + res + "/status")
+			if !strings.Contains(st, "seq=100 ") {
+				t.Errorf("after the ramp: %q", st)
+			}
+		})
+	}
 }

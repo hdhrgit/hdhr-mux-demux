@@ -79,6 +79,7 @@ type stream struct {
 	guidePIDs ts.PIDSet
 
 	lastData atomic.Int64 // unix nanos
+	began    time.Time    // when the stream got its tuner (for the settle window)
 	lost     atomic.Uint64
 	rxBytes  atomic.Uint64
 
@@ -128,6 +129,7 @@ func (st *stream) start(ctx context.Context) error {
 	st.lmu.Lock()
 	st.lease = lease
 	st.lmu.Unlock()
+	st.began = time.Now()
 	st.lastData.Store(time.Now().UnixNano())
 	log.Printf("hub: channel %s on physical tuner %s (#%d)", st.key, lease.ID(), lease.Global())
 	st.pollStatus(lease)
@@ -467,6 +469,7 @@ func (st *stream) pollStatus(lease *upstream.Lease) (upstream.Status, bool) {
 		return s, false
 	}
 	st.Info() // keeps the bitrate sample fresh even if nobody asks
+	st.h.noteSEQ(lease.ID(), s)
 	st.smu.Lock()
 	st.status, st.statusAt = s, time.Now()
 	need := !strings.Contains(st.streamInfo, "tsid=") || time.Since(st.infoAt) > 5*time.Second
@@ -570,14 +573,18 @@ func (st *stream) swap(nl *upstream.Lease) {
 
 // Info is a snapshot of the physical side of a stream.
 type Info struct {
-	Spec       chanmap.Spec
-	TunerID    string
-	Status     upstream.Status
-	StreamInfo string
-	Subs       int
-	RxBytes    uint64
-	Lost       uint64
-	RxBPS      int // bitrate pulled from the physical tuner
+	Spec    chanmap.Spec
+	TunerID string
+	Status  upstream.Status
+	// ClientStatus is Status as clients should see it: for the first moments of a stream
+	// a symbol quality of 0, which is how a tuner starts before its figures climb, is
+	// replaced (see Hub.SetSignalSettle). Status is always the device's own.
+	ClientStatus upstream.Status
+	StreamInfo   string
+	Subs         int
+	RxBytes      uint64
+	Lost         uint64
+	RxBPS        int // bitrate pulled from the physical tuner
 	// set by Hub.Streams only
 	Background bool // opened just to collect the guide
 	Lingering  bool // nobody is watching; held for a quick return
@@ -599,8 +606,12 @@ func (st *stream) Info() Info {
 		}
 		st.rateAt, st.rateBytes = now, rx
 	}
+	client := st.status
+	if settle := time.Duration(st.h.settle.Load()); settle > 0 && client.SEQ == 0 && client.Locked() && time.Since(st.began) < settle {
+		client.SEQ = st.h.lastSEQOf(id)
+	}
 	return Info{
-		Spec: st.spec, TunerID: id, Status: st.status, StreamInfo: st.streamInfo,
+		Spec: st.spec, TunerID: id, Status: st.status, ClientStatus: client, StreamInfo: st.streamInfo,
 		Subs: len(*st.subs.Load()), RxBytes: rx, Lost: st.lost.Load(), RxBPS: st.rxBPS,
 	}
 }
@@ -628,6 +639,7 @@ func (st *stream) freshStatus() {
 			continue
 		}
 		if s, err := lease.Status(); err == nil {
+			st.h.noteSEQ(lease.ID(), s)
 			st.smu.Lock()
 			st.status, st.statusAt = s, time.Now()
 			st.smu.Unlock()
