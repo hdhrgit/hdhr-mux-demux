@@ -3,9 +3,11 @@ package vdev
 import (
 	"embed"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -74,6 +76,15 @@ type uiProgramme struct {
 	Title string `json:"title"`
 	Start int64  `json:"start"` // unix seconds
 	End   int64  `json:"end"`
+	// Placeholder marks the "To Be Announced" entries some stations broadcast
+	// for hours ahead: real data, but not a programme title.
+	Placeholder bool `json:"placeholder,omitempty"`
+}
+
+var rePlaceholder = regexp.MustCompile(`(?i)^\s*(to be announced|tba|tbd|(program(me)?|programming) information (is )?(currently )?(not available|unavailable)|no (program(me)? )?information)\b`)
+
+func newProgramme(e psip.Event) *uiProgramme {
+	return &uiProgramme{Title: e.Title, Start: e.Start.Unix(), End: e.End().Unix(), Placeholder: rePlaceholder.MatchString(e.Title)}
 }
 
 type uiViewer struct {
@@ -92,7 +103,8 @@ type uiViewer struct {
 type uiTuner struct {
 	Index     int        `json:"index"`
 	Physical  string     `json:"physical"`
-	State     string     `json:"state"` // idle, watching, other
+	PhysURL   string     `json:"physicalUrl,omitempty"` // the device's own status page for this tuner
+	State     string     `json:"state"`                 // idle, watching, other
 	Frequency uint64     `json:"frequency,omitempty"`
 	Signal    *uiSignal  `json:"signal,omitempty"`
 	RxBPS     int        `json:"rxBps"` // pulled from the device
@@ -102,6 +114,7 @@ type uiTuner struct {
 
 type uiStream struct {
 	Tuner      string `json:"tuner"`
+	PhysURL    string `json:"physicalUrl,omitempty"`
 	Frequency  uint64 `json:"frequency"`
 	Viewers    int    `json:"viewers"`
 	RxBPS      int    `json:"rxBps"`
@@ -151,6 +164,25 @@ func (d *Device) entryFor(label string) (lineup.Entry, bool) {
 	return lineup.Entry{}, false
 }
 
+// physURL is the address of the status page a physical tuner's own device
+// serves ("DEVICEID/N"), where the multiplexer knows the device.
+func (d *Device) physURL(tuner string) string {
+	id, idx, ok := strings.Cut(tuner, "/")
+	if !ok {
+		return ""
+	}
+	for _, dev := range d.hub.Pool().Devices() {
+		if hdhrproto.FormatDeviceID(dev.ID) == id {
+			host := dev.IP.String()
+			if dev.WebPort != 0 && dev.WebPort != 80 {
+				host = net.JoinHostPort(host, strconv.Itoa(dev.WebPort))
+			}
+			return "http://" + host + "/tuners.html?page=tuner" + idx
+		}
+	}
+	return ""
+}
+
 // nowNext finds what is on now and what follows, from the guide.
 func (d *Device) nowNext(guideNumber string, at time.Time) (now, next *uiProgramme) {
 	d.guide.mu.Lock()
@@ -164,13 +196,13 @@ func (d *Device) nowNext(guideNumber string, at time.Time) (now, next *uiProgram
 		e := e
 		switch {
 		case !at.Before(e.Start) && at.Before(e.End()):
-			now = &uiProgramme{Title: e.Title, Start: e.Start.Unix(), End: e.End().Unix()}
+			now = newProgramme(e)
 		case e.Start.After(at) && (nx == nil || e.Start.Before(nx.Start)):
 			nx = &e
 		}
 	}
 	if nx != nil {
-		next = &uiProgramme{Title: nx.Title, Start: nx.Start.Unix(), End: nx.End().Unix()}
+		next = newProgramme(*nx)
 	}
 	return now, next
 }
@@ -226,6 +258,7 @@ func (d *Device) activity() uiActivity {
 			a.Summary.Viewers += len(t.Viewers)
 		}
 		a.Summary.TxBPS += t.TxBPS
+		t.PhysURL = d.physURL(t.Physical)
 		a.Tuners = append(a.Tuners, t)
 	}
 	a.Summary.Tuners = len(d.tuners)
@@ -241,7 +274,7 @@ func (d *Device) activity() uiActivity {
 	streams := d.hub.Streams()
 	sort.Slice(streams, func(i, j int) bool { return streams[i].TunerID < streams[j].TunerID })
 	for _, s := range streams {
-		a.Streams = append(a.Streams, uiStream{Tuner: s.TunerID, Frequency: s.Spec.Frequency, Viewers: s.Subs, RxBPS: s.RxBPS, Background: s.Background, Lingering: s.Lingering})
+		a.Streams = append(a.Streams, uiStream{Tuner: s.TunerID, PhysURL: d.physURL(s.TunerID), Frequency: s.Spec.Frequency, Viewers: s.Subs, RxBPS: s.RxBPS, Background: s.Background, Lingering: s.Lingering})
 		a.Summary.RxBPS += s.RxBPS
 	}
 	hs := d.hub.Stats()

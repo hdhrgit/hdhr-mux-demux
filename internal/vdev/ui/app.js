@@ -18,6 +18,9 @@ function dur(sec) {
   if (m) return `${m}m ${String(s).padStart(2, '0')}s`;
   return `${s}s`;
 }
+const EXT = '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2H2.5v7.5H10V7M7 2h3v3M10 2L5.5 6.5"/></svg>';
+// a physical tuner's id, linking to the device's own status page for it
+const phys = (id, url) => (url ? `<a class="phys mono" href="${esc(url)}" target="_blank" rel="noopener" title="Open this tuner's own status page">${esc(id)}${EXT}</a>` : `<span class="mono">${esc(id)}</span>`);
 const level = (v) => (v >= 70 ? '' : v >= 40 ? 'warn' : 'bad');
 
 /* ---------- appearance ---------- */
@@ -26,6 +29,7 @@ const THEMES = {
     { id: 'paper', name: 'Paper', note: 'warm, easy on the eyes', bg: '#f3eee4', dot: '#bf5328' },
     { id: 'mist', name: 'Mist', note: 'cool and clean', bg: '#eaeff6', dot: '#2b67e0' },
     { id: 'mint', name: 'Mint', note: 'soft green', bg: '#e8f1ec', dot: '#178a62' },
+    { id: 'lilac', name: 'Lilac', note: 'soft violet', bg: '#efebf6', dot: '#7448c9' },
   ],
   dark: [
     { id: 'slate', name: 'Slate', note: 'blue-grey', bg: '#1b2130', dot: '#6ea8fe' },
@@ -121,7 +125,8 @@ function meter(label, v) {
 function programme(p, nowSec) {
   if (!p) return '<div class="v-prog"><div class="title none">No guide data for this channel yet</div></div>';
   const span = Math.max(1, p.end - p.start), done = pct((nowSec - p.start) / span * 100);
-  return `<div class="v-prog"><div class="title">${esc(p.title)}</div>
+  const head = p.placeholder ? '<div class="title tba">To be announced</div><div class="tba-note">the station has not published this slot</div>' : `<div class="title">${esc(p.title)}</div>`;
+  return `<div class="v-prog">${head}
     <div class="progress" role="progressbar" aria-valuenow="${done}" aria-valuemin="0" aria-valuemax="100"><i style="width:${done}%"></i></div>
     <div class="times"><span>${clock(p.start)}</span><span>${Math.max(0, Math.round((p.end - nowSec) / 60))} min left · ends ${clock(p.end)}</span></div></div>`;
 }
@@ -132,7 +137,7 @@ function viewerHTML(v, nowSec) {
     <div class="v-top"><span class="chan ${raw ? 'raw' : ''}">${esc(v.channel)}</span><span class="v-name">${esc(v.name || 'Unlisted channel')}</span>
       <span class="v-client mono">${esc(v.client || 'unknown')}${v.control ? ' · control' : ''}</span></div>
     ${programme(v.now, nowSec)}
-    ${v.next ? `<div class="times"><span>Next</span><span>${esc(v.next.title)} · ${clock(v.next.start)}</span></div>` : ''}
+    ${v.next ? `<div class="times"><span>Next</span><span>${v.next.placeholder ? 'to be announced' : esc(v.next.title)} · ${clock(v.next.start)}</span></div>` : ''}
     <div class="v-meta"><span>watching <b>${dur(nowSec - v.since)}</b></span><span><b>${(v.bps / 1e6).toFixed(1)}</b> Mbps</span>
       <span class="buf">buffer <span class="meter ${queue > 60 ? 'bad' : queue > 25 ? 'warn' : ''}"><i style="width:${queue}%"></i></span> ${queue}%</span>
       ${v.drops ? `<span class="drops">${v.drops} dropped</span>` : ''}</div></div>`;
@@ -142,7 +147,7 @@ function tunerHTML(t, nowSec) {
   const state = { watching: 'Watching', other: 'Other app', idle: 'Idle' }[t.state];
   return `<div class="card tuner ${t.state}">
     <div class="tuner-head"><div class="tuner-num">${t.index}</div>
-      <div class="tuner-title"><b>Tuner ${t.index}</b><span class="mono">${esc(t.physical)}${t.frequency ? ' · ' + mhz(t.frequency) : ''}</span></div>
+      <div class="tuner-title"><b>Tuner ${t.index}</b><span>${phys(t.physical, t.physicalUrl)}${t.frequency ? ' · ' + mhz(t.frequency) : ''}</span></div>
       <span class="chip-state ${t.state}">${state}</span></div>
     <div class="signals">${meter('Signal', sig.strength)}${meter('Quality', sig.quality)}${meter('Symbols', sig.symbol)}
       <div>${spark(history.get(t.index) || [])}<div class="rate"><b>${(t.rxBps / 1e6).toFixed(1)}</b> Mbps in</div></div></div>
@@ -175,12 +180,12 @@ function updateActivity(a) {
   patch($('#tuners'), active.length ? active.map((t) => tunerHTML(t, nowSec)).join('') :
     `<div class="card empty" style="grid-column:1/-1"><h3>Quiet right now</h3>Nobody is watching. All ${S.tuners} tuners are free.</div>`);
   patch($('#idle-wrap'), idle.length && active.length ? `<div class="section-title">Free tuners <span class="count">${idle.length}</span></div>
-    <div class="idle-row">${idle.map((t) => `<span class="pill"><b>${t.index}</b><span class="mono">${esc(t.physical)}</span></span>`).join('')}</div>` : '');
+    <div class="idle-row">${idle.map((t) => `<span class="pill"><b>${t.index}</b>${phys(t.physical, t.physicalUrl)}</span>`).join('')}</div>` : '');
 
   const bg = a.streams.filter((s) => s.background || s.lingering);
   patch($('#bg-wrap'), bg.length ? `<div class="section-title">Behind the scenes <span class="count">${bg.length}</span></div>
     <div class="bg-list">${bg.map((s) => `<div class="card bg-item"><span class="dot ${s.background ? 'on' : ''}"></span><div><b>${s.background ? 'Collecting the guide' : 'Held for a quick return'}</b>
-      <small class="mono">${esc(s.tuner)} · ${mhz(s.frequency)} · ${(s.rxBps / 1e6).toFixed(1)} Mbps</small></div></div>`).join('')}</div>` : '');
+      <small>${phys(s.tuner, s.physicalUrl)} · ${mhz(s.frequency)} · ${(s.rxBps / 1e6).toFixed(1)} Mbps</small></div></div>`).join('')}</div>` : '');
   const c = a.counters;
   patch($('#counters'), `<span><b>${c.streamsOpened}</b> tunings</span><span><b>${c.failovers}</b> failovers</span><span><b>${c.filterUpdates}</b> filter updates</span>` +
     `<span><b>${c.reclaims}</b> idle tuners reclaimed</span><span><b>${c.droppedBatches}</b> dropped batches</span>`);
@@ -209,13 +214,13 @@ function lineupRows() {
     if (lineup.filter === 'live' && !c.watching) return false;
     if (lineup.filter === 'fav' && !c.favorite) return false;
     if (!q) return true;
-    return `${c.number} ${c.name} ${c.now ? c.now.title : ''} ${c.next ? c.next.title : ''}`.toLowerCase().includes(q);
+    return `${c.number} ${c.name} ${c.now && !c.now.placeholder ? c.now.title : ''} ${c.next && !c.next.placeholder ? c.next.title : ''}`.toLowerCase().includes(q);
   }).map((c) => {
     const p = c.now, done = p ? pct((nowSec - p.start) / Math.max(1, p.end - p.start) * 100) : 0;
     return `<tr data-url="${esc(c.url)}"><td class="c-num"><span class="chan">${esc(c.number)}</span></td>
       <td><b>${esc(c.name)}</b>${c.hd ? '<span class="tag">HD</span>' : ''}${c.modulation === 'atsc3' ? '<span class="tag">3.0</span>' : ''}${c.watching ? `<span class="tag live">${c.watching} watching</span>` : ''}</td>
-      <td class="prog">${p ? `<div class="title">${esc(p.title)}</div><div class="progress"><i style="width:${done}%"></i></div><small>${clock(p.start)} – ${clock(p.end)}</small>` : '<small>no guide data</small>'}</td>
-      <td class="prog c-next">${c.next ? `<div class="title">${esc(c.next.title)}</div><small>${clock(c.next.start)}</small>` : ''}</td>
+      <td class="prog">${p ? `<div class="title">${p.placeholder ? '<i style="color:var(--muted);font-weight:450">To be announced</i>' : esc(p.title)}</div><div class="progress"><i style="width:${done}%"></i></div><small>${clock(p.start)} – ${clock(p.end)}</small>` : '<small>no guide data</small>'}</td>
+      <td class="prog c-next">${c.next ? `<div class="title">${c.next.placeholder ? '<i style="color:var(--muted);font-weight:450">To be announced</i>' : esc(c.next.title)}</div><small>${clock(c.next.start)}</small>` : ''}</td>
       <td class="c-rf">${mhz(c.frequency)}${c.codec ? `<br><small>${esc(c.codec)}</small>` : ''}</td>
       <td class="c-act"><button class="btn" data-copy>Copy URL</button></td></tr>`;
   }).join('');

@@ -35,7 +35,7 @@ var channels = []fakehdhr.Channel{
 	{Frequency: 177000000, TSID: 1, Programs: []fakehdhr.Program{
 		prog(1, "7.1", "KGO-HD", "ABC7 Morning News", "Good Morning America", 22, 60),
 		prog(2, "7.2", "LOCLish", "Bay Area Backyard", "Cooking With Friends", 12, 30),
-		prog(3, "7.3", "Charge!", "Hawaii Five-0", "MacGyver", 40, 60)}},
+		prog(3, "7.3", "Charge!", "To Be Announced", "MacGyver", 40, 60)}},
 	{Frequency: 473000000, TSID: 2, Programs: []fakehdhr.Program{
 		prog(1, "14.1", "KDTV-HD", "Caso Cerrado", "Noticias 14", 35, 60),
 		prog(3, "14.3", "Bounce", "Family Time", "Lincoln Heights", 5, 30)}},
