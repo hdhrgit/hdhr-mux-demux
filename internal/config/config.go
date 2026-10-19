@@ -68,6 +68,10 @@ type Config struct {
 	// already receiving joins that tuner instead of taking another. Never the other
 	// way round: a direct client does not join an /auto/ stream.
 	AutoJoinDirect *bool `json:"auto_join_direct"`
+	// AutoJoinOtherLocations (default true): an /auto/ request for a channel that a
+	// session already open receives on another RF channel than the lineup lists (the
+	// same station via another antenna or feed) rides that session.
+	AutoJoinOtherLocations *bool `json:"auto_join_other_locations"`
 	// StreamTTL is the IP TTL of the video the multiplexer sends (HTTP streams, UDP/RTP
 	// targets), 3 by default like the devices, so that it does not travel beyond a
 	// couple of routers. Values above 8 are quietly reduced to 8; 0 means the default.
@@ -212,6 +216,10 @@ func Load(path string) (*Config, error) {
 	if c.AutoJoinDirect == nil {
 		t := true
 		c.AutoJoinDirect = &t
+	}
+	if c.AutoJoinOtherLocations == nil {
+		t := true
+		c.AutoJoinOtherLocations = &t
 	}
 	// The streams must not travel the internet at large (the devices push a lot of
 	// bandwidth, which would make a fine weapon): 3 unless set, never more than 8.

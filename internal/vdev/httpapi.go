@@ -488,6 +488,19 @@ func (d *Device) openAuto(ctx context.Context, rq streamReq, start func(*VTuner)
 		}
 	}
 
+	// 1b. The station may be received elsewhere than the lineup says (another
+	// antenna or feed): a session that already carries it is as good.
+	if d.cfg.AutoJoinOtherLocations && rq.vchannel != "" && !rq.service {
+		for _, c := range d.hub.CarryingChannel(rq.vchannel) {
+			if c.Spec.Frequency == rq.spec.Frequency || c.Tuner >= len(d.tuners) {
+				continue // the lineup's own place was tried above
+			}
+			if sub, err := d.tuners[c.Tuner].joinHTTP(ctx, c.Spec, c.Program, false, false); err == nil {
+				return d.tuners[c.Tuner], sub, nil
+			}
+		}
+	}
+
 	// 2. Nothing to reuse: open a new tuner, choosing the one that does the
 	// least harm to what may be asked later (ATSC 1.0 stays off the ATSC 3.0
 	// tuners, tuners used by other applications or still lingering come last).

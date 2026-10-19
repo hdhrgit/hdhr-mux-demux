@@ -75,6 +75,9 @@ type Config struct {
 	// AutoJoinDirect lets an /auto/ request join a tuner a direct client already
 	// holds on the same channel.
 	AutoJoinDirect bool
+	// AutoJoinOtherLocations lets an /auto/ request ride a session that carries the
+	// channel on another RF channel than the lineup lists.
+	AutoJoinOtherLocations bool
 	// StreamTTL is the IP TTL of the streams sent to clients (0 = 3; never more than 8).
 	StreamTTL int
 	// ScanPollInterval, if set, replaces the interval at which a device scan is polled.

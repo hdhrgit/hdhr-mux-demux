@@ -56,12 +56,13 @@ type env struct {
 
 // Knobs a test may set (and must restore) before calling setup.
 var (
-	testMode   = ""                        // upstream transport: "" = http, or "rtp"
-	testLinger = time.Duration(0)          // hub linger
-	testBuffer = 0                         // hub client buffer in bytes (0 = default)
-	testTuners func(ids []uint32) []string // upstream tuner list, built from the fake device IDs
-	testMask   = false                     // ask the devices to send only the PIDs being watched
-	testModels []string                    // device models by index (default: ATSC 3.0 capable)
+	testMode     = ""                        // upstream transport: "" = http, or "rtp"
+	testLinger   = time.Duration(0)          // hub linger
+	testBuffer   = 0                         // hub client buffer in bytes (0 = default)
+	testTuners   func(ids []uint32) []string // upstream tuner list, built from the fake device IDs
+	testChannels []fakehdhr.Channel          // what the fake devices broadcast (nil = channels)
+	testMask     = false                     // ask the devices to send only the PIDs being watched
+	testModels   []string                    // device models by index (default: ATSC 3.0 capable)
 )
 
 func model(i int) string {
@@ -76,7 +77,7 @@ func setup(t *testing.T, physTuners []int, virtual int, mod func(*vdev.Config)) 
 	e := &env{t: t}
 	var addrs []string
 	for i, n := range physTuners {
-		f, err := fakehdhr.Start(fakehdhr.Config{DeviceID: hdhrproto.MakeDeviceID(0x10200000 + uint32(i)<<8), Tuners: n, Channels: channels, Model: model(i)})
+		f, err := fakehdhr.Start(fakehdhr.Config{DeviceID: hdhrproto.MakeDeviceID(0x10200000 + uint32(i)<<8), Tuners: n, Channels: pick(testChannels, channels), Model: model(i)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2726,4 +2727,59 @@ func TestActivityNamesProgrammesTheLineupDoesNotPlaceHere(t *testing.T) {
 		v0, v1 := a.Tuners[0].Viewers[0], a.Tuners[0].Viewers[1]
 		return !v0.Scan && !v1.Scan && v0.Channel == "7.1" && v1.Channel == "7.2"
 	})
+}
+
+func pick(a, b []fakehdhr.Channel) []fakehdhr.Channel {
+	if a != nil {
+		return a
+	}
+	return b
+}
+
+// The same station can be received on a second RF channel (another antenna, a
+// feed) that the lineup does not list. A session that already carries it is ridden
+// by /auto/ instead of taking a tuner, when auto_join_other_locations is on.
+func TestAutoRidesASessionAtAnotherLocation(t *testing.T) {
+	for _, ride := range []bool{true, false} {
+		t.Run(fmt.Sprintf("ride=%v", ride), func(t *testing.T) {
+			testChannels = append(append([]fakehdhr.Channel{}, channels...),
+				fakehdhr.Channel{Frequency: 191000000, TSID: 9, Programs: []fakehdhr.Program{{Number: 5, VChannel: "7.1", Name: "ALPHA"}}})
+			defer func() { testChannels = nil }()
+			e := setup(t, []int{3}, 3, func(c *vdev.Config) { c.AutoJoinOtherLocations, c.AutoJoinDirect = ride, true })
+			ctl := hdhrproto.NewControl(e.ctl)
+			defer ctl.Close()
+			rx, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rx.Close()
+			// somebody (tvheadend) is on 191 MHz, where the lineup does not put 7.1
+			for name, val := range map[string]string{"channel": "auto:191000000", "target": "udp://" + rx.LocalAddr().String()} {
+				if _, err := ctl.Set("/tuner0/"+name, val, 0); err != nil {
+					t.Fatalf("set %s: %v", name, err)
+				}
+			}
+			waitFor(t, "its channel table", 6*time.Second, func() bool { return len(e.hub.CarryingChannel("7.1")) > 0 })
+			// streams teach the lineup where they saw a channel; the lineup's place is 177 MHz
+			e.lu.Replace(testLineup)
+
+			c, rc := e.open("/auto/v7.1")
+			if c == nil {
+				t.Fatal("/auto/ refused")
+			}
+			defer c.close()
+			res := rc.Header.Get("X-HDHomeRun-Resource")
+			an := analyze(t, c.read(t, 188*200))
+			if an.ccErrors != 0 {
+				t.Fatalf("continuity errors %d", an.ccErrors)
+			}
+			if ride {
+				if res != "tuner0" || !an.esProgs[5] || e.activePhysical() != 1 {
+					t.Fatalf("should ride tuner0 at 191 MHz: %q programmes %v, %d physical tuners", res, an.esProgs, e.activePhysical())
+				}
+			} else if res == "tuner0" || !an.esProgs[1] || e.activePhysical() != 2 {
+				t.Fatalf("should open the lineup's own place: %q programmes %v, %d physical tuners", res, an.esProgs, e.activePhysical())
+			}
+		})
+	}
 }

@@ -811,3 +811,42 @@ func (s *Sub) ProgramChannel(program uint16) (number, name string, ok bool) {
 	}
 	return ch.GuideName, ch.Name, true
 }
+
+// AltCarrier is a stream that carries a channel at another place than the lineup
+// says: the multiplex's own channel table lists the guide number.
+type AltCarrier struct {
+	Tuner   int // global tuner number
+	Spec    chanmap.Spec
+	Program uint16 // the channel's programme on that multiplex
+}
+
+// CarryingChannel lists the busy streams on pinned tuners whose own channel table
+// (PSIP) carries the virtual channel number, wherever on the air that is. A
+// station can be received on more than one RF channel (a second antenna, a cable
+// feed, a translator); a viewer of it can ride a session that is already open
+// instead of taking a tuner. ATSC 3.0 services are not considered.
+func (h *Hub) CarryingChannel(number string) []AltCarrier {
+	h.mu.Lock()
+	var sts []*stream
+	for _, st := range h.streams {
+		if st.tuner >= 0 && !st.dead && !st.service && st.refs > 0 {
+			sts = append(sts, st)
+		}
+	}
+	h.mu.Unlock()
+	var out []AltCarrier
+	for _, st := range sts {
+		st.fmu.Lock()
+		for prog, ch := range st.vct {
+			if ch.GuideName != number {
+				continue
+			}
+			if _, inPAT := st.programs[prog]; inPAT {
+				out = append(out, AltCarrier{Tuner: st.tuner, Spec: st.spec, Program: prog})
+			}
+		}
+		st.fmu.Unlock()
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Tuner < out[j].Tuner })
+	return out
+}
