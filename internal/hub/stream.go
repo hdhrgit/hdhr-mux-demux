@@ -131,9 +131,10 @@ func (st *stream) start(ctx context.Context) error {
 	st.lastData.Store(time.Now().UnixNano())
 	log.Printf("hub: channel %s on physical tuner %s (#%d)", st.key, lease.ID(), lease.Global())
 	st.pollStatus(lease)
-	st.wg.Add(3)
+	st.wg.Add(4)
 	go st.reader()
 	go st.monitor()
+	go st.freshStatus()
 	go st.masker(MaskGrace)
 	return nil
 }
@@ -601,5 +602,35 @@ func (st *stream) Info() Info {
 	return Info{
 		Spec: st.spec, TunerID: id, Status: st.status, StreamInfo: st.streamInfo,
 		Subs: len(*st.subs.Load()), RxBytes: rx, Lost: st.lost.Load(), RxBPS: st.rxBPS,
+	}
+}
+
+// freshStatus keeps the cached tuner status close to the device's while a stream
+// is new. A tuner's signal quality figures start at zero and climb for a second or
+// two after it locks; clients (Channels DVR counts a second with symbol quality
+// 0 as a signal error) read them through the multiplexer, and a status that is up
+// to a second old would show those zeros much longer than the device itself does.
+func (st *stream) freshStatus() {
+	defer st.wg.Done()
+	t := time.NewTicker(200 * time.Millisecond)
+	defer t.Stop()
+	deadline := time.After(8 * time.Second)
+	for {
+		select {
+		case <-st.stop:
+			return
+		case <-deadline:
+			return
+		case <-t.C:
+		}
+		lease := st.currentLease()
+		if lease == nil {
+			continue
+		}
+		if s, err := lease.Status(); err == nil {
+			st.smu.Lock()
+			st.status, st.statusAt = s, time.Now()
+			st.smu.Unlock()
+		}
 	}
 }
