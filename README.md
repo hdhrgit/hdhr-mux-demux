@@ -334,6 +334,19 @@ Useful alerts: `hdhrmux_physical_tuners_online` below `hdhrmux_physical_tuners` 
 `hdhrmux_dropped_batches_total` (a client cannot keep up), and
 `rate(hdhrmux_stream_requests_total{code="805"}[10m])` (viewers turned away: out of tuners).
 
+### Load and leak testing (`cmd/loadtest`)
+
+```
+loadtest serve                      # multiplexer + simulated devices (3 devices, ATSC 1.0 and 3.0), no hardware
+loadtest swarm -viewers 100 -duration 1h -csv run.csv
+```
+
+`swarm` starts N viewers that each watch a random channel for a random time before switching (a few
+are too slow to keep up), and once a minute reads the multiplexer's `/metrics`: RSS, heap,
+goroutines, open file descriptors, tunings, dropped batches, failovers. It finishes with a verdict on
+whether any of them kept growing in the second half of the run. `serve -pprof` exposes Go profiling
+for a heap profile while the numbers are high.
+
 ### Environment variables
 
 These override the file and use the same names as the `hdhomerunsignal` tool where the
