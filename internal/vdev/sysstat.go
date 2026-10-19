@@ -1,7 +1,6 @@
 package vdev
 
 import (
-	"fmt"
 	"os"
 	"runtime"
 	"strconv"
@@ -14,36 +13,32 @@ import (
 // uiSystem is how the multiplexer itself is doing, for the activity page: on a
 // small machine (a Raspberry Pi) CPU, memory and heat decide whether video stutters.
 type uiSystem struct {
-	CPUPercent    float64  `json:"cpuPercent"`              // this process, of one core, over the last minute
-	Cores         int      `json:"cores"`                   //
-	RSSBytes      uint64   `json:"rssBytes"`                // resident memory
-	MemLimitBytes uint64   `json:"memLimitBytes,omitempty"` // container or service limit, if any
-	Goroutines    int      `json:"goroutines"`
-	OpenFDs       int      `json:"openFds"`
-	Load1         float64  `json:"load1,omitempty"` // host load average
-	Load5         float64  `json:"load5,omitempty"`
-	TempC         float64  `json:"tempC,omitempty"`     // CPU temperature, where the host reports it
-	Throttled     bool     `json:"throttled,omitempty"` // a Raspberry Pi is under-voltage or throttling now
-	Warnings      []string `json:"warnings,omitempty"`
+	CPUPercent    float64 `json:"cpuPercent"`              // this process, of one core, over the last minute
+	Cores         int     `json:"cores"`                   //
+	RSSBytes      uint64  `json:"rssBytes"`                // resident memory
+	MemLimitBytes uint64  `json:"memLimitBytes,omitempty"` // container or service limit, if any
+	Goroutines    int     `json:"goroutines"`
+	OpenFDs       int     `json:"openFds"`
+	Load1         float64 `json:"load1,omitempty"` // host load average
+	Load5         float64 `json:"load5,omitempty"`
+	TempC         float64 `json:"tempC,omitempty"`     // CPU temperature, where the host reports it
+	Throttled     bool    `json:"throttled,omitempty"` // a Raspberry Pi is under-voltage or throttling now
 }
 
 type sysSample struct {
-	at      time.Time
-	cpu     float64 // process CPU seconds
-	dropped uint64  // batches dropped for slow clients, ever
+	at  time.Time
+	cpu float64 // process CPU seconds
 }
 
-// sysSampler remembers the last minute of CPU and drop counts, one sample every 5 s.
+// sysSampler remembers the last minute of CPU use, one sample every 5 s.
 type sysSampler struct {
 	mu      sync.Mutex
 	samples []sysSample
 }
 
 const (
-	sysEvery   = 5 * time.Second
-	sysKeep    = 13 // a minute and a bit
-	cpuWarnPct = 80 // of the whole machine
-	tempWarnC  = 80.0
+	sysEvery = 5 * time.Second
+	sysKeep  = 13 // a minute and a bit
 )
 
 func processCPUSeconds() float64 {
@@ -64,7 +59,7 @@ func (s *sysSampler) add(smp sysSample) {
 // sysLoop takes a sample every few seconds while the device runs.
 func (d *Device) sysLoop() {
 	defer d.wg.Done()
-	d.sys.add(sysSample{time.Now(), processCPUSeconds(), d.hub.Stats().DroppedBatches})
+	d.sys.add(sysSample{time.Now(), processCPUSeconds()})
 	t := time.NewTicker(sysEvery)
 	defer t.Stop()
 	for {
@@ -72,13 +67,13 @@ func (d *Device) sysLoop() {
 		case <-d.quit:
 			return
 		case <-t.C:
-			d.sys.add(sysSample{time.Now(), processCPUSeconds(), d.hub.Stats().DroppedBatches})
+			d.sys.add(sysSample{time.Now(), processCPUSeconds()})
 		}
 	}
 }
 
-// system describes the process and the machine now, with warnings for the things
-// that make video stutter.
+// system describes the process and the machine now. It only reports: what to make of
+// the figures is for the person running it (the same data is in /metrics).
 func (d *Device) system() uiSystem {
 	s := uiSystem{Cores: runtime.NumCPU(), Goroutines: runtime.NumGoroutine(), RSSBytes: uint64(residentBytes())}
 	if n, err := openFDs(); err == nil {
@@ -90,35 +85,18 @@ func (d *Device) system() uiSystem {
 	s.MemLimitBytes = memoryLimit()
 	s.Load1, s.Load5 = loadAverages()
 	s.TempC, s.Throttled = piHealth()
-	s.assess(smp, d.hub.Stats().DroppedBatches)
+	s.cpuOver(smp)
 	return s
 }
 
-// assess works out the CPU use over the samples and the warnings, from the figures
-// already in s.
-func (s *uiSystem) assess(smp []sysSample, droppedNow uint64) {
-	if len(smp) >= 2 {
-		first, last := smp[0], smp[len(smp)-1]
-		if dt := last.at.Sub(first.at).Seconds(); dt > 0 {
-			s.CPUPercent = (last.cpu - first.cpu) / dt * 100
-		}
-		if droppedNow > first.dropped {
-			s.Warnings = append(s.Warnings, fmt.Sprintf("%d batches were dropped for slow clients in the last minute: a client or the network is not keeping up", droppedNow-first.dropped))
-		}
+// cpuOver works out the process's CPU use over the samples.
+func (s *uiSystem) cpuOver(smp []sysSample) {
+	if len(smp) < 2 {
+		return
 	}
-	if s.Cores > 0 && s.CPUPercent/float64(s.Cores) >= cpuWarnPct {
-		s.Warnings = append(s.Warnings, fmt.Sprintf("The multiplexer is using %.0f%% of a %d-core machine: video may stutter", s.CPUPercent/float64(s.Cores), s.Cores))
-	} else if s.Cores > 0 && s.Load1/float64(s.Cores) >= 2 {
-		s.Warnings = append(s.Warnings, fmt.Sprintf("The machine is overloaded (load %.1f on %d cores): something else may be using it", s.Load1, s.Cores))
-	}
-	if s.MemLimitBytes > 0 && float64(s.RSSBytes) >= 0.8*float64(s.MemLimitBytes) {
-		s.Warnings = append(s.Warnings, "Memory use is close to its limit")
-	}
-	if s.TempC >= tempWarnC {
-		s.Warnings = append(s.Warnings, fmt.Sprintf("The CPU is hot (%.0f °C): a Raspberry Pi slows down at about 80 °C", s.TempC))
-	}
-	if s.Throttled {
-		s.Warnings = append(s.Warnings, "The Raspberry Pi reports under-voltage or throttling: check its power supply and cooling")
+	first, last := smp[0], smp[len(smp)-1]
+	if dt := last.at.Sub(first.at).Seconds(); dt > 0 {
+		s.CPUPercent = (last.cpu - first.cpu) / dt * 100
 	}
 }
 

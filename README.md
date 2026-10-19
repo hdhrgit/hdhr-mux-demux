@@ -377,11 +377,11 @@ are embedded in the binary.
   another guide source may know better).
   A **This machine** section shows how the multiplexer itself is doing: its CPU use over the last
   minute (of one core, and how many cores there are), resident memory (and the container or service
-  limit, if any), the host load, the CPU temperature where the system reports it, goroutines and open
-  files. A "Heads up" line appears when the multiplexer uses 80% of the whole machine for a minute,
-  the host is overloaded (load over twice the cores), batches were dropped for slow clients in the last
-  minute, memory is near its limit, the CPU is at 80 °C or more, or a Raspberry Pi reports under-voltage
-  or throttling. The same figures are in `/metrics` (`process_*`, `go_*`).
+  limit, if any), the host load, the CPU temperature where the system reports it (and whether a
+  Raspberry Pi says it is under-voltage or throttled), goroutines and open files. It only reports;
+  there are no alerts. What counts as too much is for the person running it to decide, and the same
+  figures, plus `hdhrmux_dropped_batches_total`, are in `/metrics` (`process_*`, `go_*`) for Prometheus
+  or Netdata.
 * **Lineup** – every channel with what is on now and next, search, filters (HD, being watched,
   favourites), and a button that copies the channel's stream URL.
 * **Appearance** (the half-moon button) – System / Light / Dark, and a choice of theme for each:
