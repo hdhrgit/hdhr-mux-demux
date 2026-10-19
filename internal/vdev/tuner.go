@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"strings"
 	"sync"
@@ -842,6 +843,7 @@ func (v *VTuner) setTarget(value string) (string, error) {
 		return value, nil
 	}
 	if _, err := parseTarget(value); err != nil {
+		log.Printf("tuner%d: refusing target %q: %v", v.idx, value, err)
 		return "", errors.New("ERROR: invalid set value")
 	}
 	v.mu.Lock()
@@ -960,6 +962,9 @@ func parseTarget(s string) (target, error) {
 	a, err := net.ResolveUDPAddr("udp4", s[6:])
 	if err != nil || a.Port == 0 {
 		return t, fmt.Errorf("bad target %q", s)
+	}
+	if !privateTarget(a.IP) {
+		return t, fmt.Errorf("target %s is not on a private IPv4 network", a.IP)
 	}
 	t.addr = a
 	return t, nil

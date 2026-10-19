@@ -2634,3 +2634,25 @@ func TestAutoJoinsADirectClient(t *testing.T) {
 		})
 	}
 }
+
+// A control request is unauthenticated and its source can be forged: video is
+// only ever sent to addresses on a private IPv4 network (or this machine).
+func TestTargetsMustBePrivate(t *testing.T) {
+	e := setup(t, []int{1}, 1, nil)
+	ctl := hdhrproto.NewControl(e.ctl)
+	defer ctl.Close()
+	if _, err := ctl.Set("/tuner0/channel", "auto:177000000", 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, tgt := range []string{"udp://8.8.8.8:5000", "rtp://93.184.216.34:5000", "udp://224.0.0.251:5000"} {
+		if _, err := ctl.Set("/tuner0/target", tgt, 0); err == nil {
+			t.Errorf("target %s accepted", tgt)
+		}
+	}
+	for _, tgt := range []string{"udp://127.0.0.1:5000", "rtp://192.168.1.50:5004", "udp://10.0.0.7:1234"} {
+		if _, err := ctl.Set("/tuner0/target", tgt, 0); err != nil {
+			t.Errorf("target %s refused: %v", tgt, err)
+		}
+	}
+	ctl.Set("/tuner0/target", "none", 0)
+}

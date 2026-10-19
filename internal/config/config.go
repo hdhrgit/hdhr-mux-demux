@@ -70,7 +70,7 @@ type Config struct {
 	AutoJoinDirect *bool `json:"auto_join_direct"`
 	// StreamTTL is the IP TTL of the video the multiplexer sends (HTTP streams, UDP/RTP
 	// targets), 3 by default like the devices, so that it does not travel beyond a
-	// couple of routers. 0 keeps the system default (64).
+	// couple of routers. Values above 8 are quietly reduced to 8; 0 means the default.
 	StreamTTL *int `json:"stream_ttl"`
 	// ClientBufferMB is the per-client queue for slow consumers (default 16).
 	ClientBufferMB int      `json:"client_buffer_mb"`
@@ -213,13 +213,13 @@ func Load(path string) (*Config, error) {
 		t := true
 		c.AutoJoinDirect = &t
 	}
-	if c.StreamTTL == nil {
-		n := 3
-		c.StreamTTL = &n
+	// The streams must not travel the internet at large (the devices push a lot of
+	// bandwidth, which would make a fine weapon): 3 unless set, never more than 8.
+	n := 3
+	if c.StreamTTL != nil && *c.StreamTTL > 0 {
+		n = min(*c.StreamTTL, 8)
 	}
-	if *c.StreamTTL < 0 || *c.StreamTTL > 255 {
-		return nil, fmt.Errorf("stream_ttl %d: want 0-255", *c.StreamTTL)
-	}
+	c.StreamTTL = &n
 	applyEnv(c)
 	if c.StreamListen == "" {
 		c.StreamListen = ":5004"
