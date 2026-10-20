@@ -272,7 +272,7 @@ func (d *Device) Start() error {
 	d.wg.Add(2)
 	go d.lineupLoop()
 	go d.guideLoop()
-	if d.cfg.SSDP && !d.cfg.Hidden {
+	if ssdpWanted(d.cfg, d.httpLn) {
 		d.ssdp = newSSDP(d)
 		if err := d.ssdp.start(); err != nil {
 			log.Printf("ssdp disabled: %v", err)
@@ -670,4 +670,18 @@ func (d *Device) scanState() (bool, hub.Progress, string) {
 	d.scanMu.Lock()
 	defer d.scanMu.Unlock()
 	return d.scanning, d.scanProg, d.source
+}
+
+// ssdpWanted says whether to announce on the network: not when hidden, and not when
+// the web interface listens on loopback only, because the announcements carry the
+// machine's LAN address and a client that follows them finds nothing listening.
+func ssdpWanted(cfg Config, httpLn net.Listener) bool {
+	if !cfg.SSDP || cfg.Hidden {
+		return false
+	}
+	if a, ok := httpLn.Addr().(*net.TCPAddr); ok && a.IP.IsLoopback() {
+		log.Printf("ssdp: not announcing: the web interface listens on %s only, so nobody on the network could reach what the announcements point at", a.IP)
+		return false
+	}
+	return true
 }
