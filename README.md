@@ -180,6 +180,10 @@ titles and times, descriptions). The multiplexer reads it from the streams it al
   `guide.refresh` (default 1 h, 0 turns it off) it listens to each ATSC 1.0 multiplex in the lineup for
   `guide.hold` (45 s), `guide.parallel` (3) at a time, on spare tuners. A pass never keeps a
   tuner from a viewer: it gives it up at once. `POST /epg/refresh` starts one now.
+  On a new installation no channel's place on the air is known yet (the lineup comes from the devices
+  and has no frequencies), so the first pass begins by finding out: it looks for one channel of each
+  multiplex by name, which teaches every channel on that multiplex, about one tuning per multiplex and
+  only once (the log says `guide: finding where the channels are on the air`).
 
 It is served as **XMLTV** on `/epg` (also `/epg.xml`) and as JSON on `/epg.json`, for the
 channels of the lineup. Options: `?hours=N` ahead (default 72), `?channel=7.1` (repeatable),
