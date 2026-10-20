@@ -152,7 +152,7 @@ func TestSettingsOverlayAndSave(t *testing.T) {
 	if c5, _ := Load(cfgPath); *c5.Discoverable {
 		t.Error("environment did not override")
 	}
-	if got := NewManager(cfgPath, c2).OverriddenByEnv(); got["discoverable"] != "HDHOMERUN_DISCOVERABLE" {
+	if got := NewManager(cfgPath, c2).OverriddenByEnv(); got["discoverable"] != "the environment variable HDHOMERUN_DISCOVERABLE" {
 		t.Errorf("overridden %v", got)
 	}
 }
@@ -251,5 +251,37 @@ func TestZeroSwitchesThingsOff(t *testing.T) {
 	}
 	if c := load(t, `{"guide":{"unlocked":false}}`); c.Guide.Unlocked {
 		t.Error("an explicit guide.unlocked=false was overridden")
+	}
+}
+
+func TestAdvancedSettingsSave(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "c.json")
+	os.WriteFile(cfgPath, []byte(`{"state_dir":"`+filepath.Join(dir, "state")+`"}`), 0o644)
+	c, err := Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.HTTPListenDefault {
+		t.Error("http_listen was not set, so it is the default")
+	}
+	m := NewManager(cfgPath, c)
+	if err := m.Save(map[string]any{"upstream.local_ip": "not an address"}); err == nil {
+		t.Error("an invalid local_ip was accepted")
+	}
+	if err := m.Save(map[string]any{"manufacturer": "Acme", "lineup.scan_from": "14", "lineup.scan_to": "36", "upstream.local_ip": "192.168.1.9", "upstream.wait_free": "5s", "upstream.discover_targets": "192.168.2.255", "http_listen": ":8081"}); err != nil {
+		t.Fatal(err)
+	}
+	c2, _ := Load(cfgPath)
+	if c2.Manufacturer != "Acme" || c2.Lineup.ScanFrom != 14 || c2.Lineup.ScanTo != 36 || c2.Upstream.LocalIP != "192.168.1.9" ||
+		time.Duration(c2.Upstream.WaitFree) != 5*time.Second || len(c2.Upstream.DiscoverTarget) != 1 {
+		t.Errorf("advanced settings not applied: %+v", c2)
+	}
+	if c2.HTTPListenDefault || c2.HTTPListen != ":8081" {
+		t.Errorf("a saved http_listen must be taken as chosen: %q default=%v", c2.HTTPListen, c2.HTTPListenDefault)
+	}
+	m.SetOverride("http_listen", "the -http option")
+	if got := m.OverriddenByEnv()["http_listen"]; got != "the -http option" {
+		t.Errorf("override %q", got)
 	}
 }

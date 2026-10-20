@@ -160,6 +160,7 @@ function statCard(label, value, unit, sub, extra = '', cls = '') {
 
 function updateActivity(a) {
   const nowSec = a.time / 1000, S = a.summary;
+  patch($('#setup-wrap'), a.setup ? `<div class="banner warn" role="status" style="margin-top:14px"><b>Nothing to serve yet</b><p>${esc(a.setup)} <a href="#/settings">Open Settings</a></p></div>` : '');
   $('#device-sub').textContent = `${a.device.model} · ${a.device.id}${a.device.version ? ' · v' + a.device.version.replace(/^v/, '') : ''} · up ${dur(a.device.uptime)}`;
   $('#foot-note').textContent = `Updated ${new Date(a.time).toLocaleTimeString()}`;
   for (const t of a.tuners) {
@@ -206,6 +207,7 @@ function updateActivity(a) {
 function renderActivity(root) {
   root.innerHTML = `<div class="page-title"><h1>Activity</h1><p>Who is watching what, right now.</p></div>
     <div class="cards" id="stats">${'<div class="skeleton"></div>'.repeat(5)}</div>
+    <div id="setup-wrap"></div>
     <div class="section-title">Active tuners <span class="count" id="n-active">–</span></div>
     <div class="tuners" id="tuners"></div><div id="idle-wrap"></div><div id="bg-wrap"></div><div class="counters" id="counters"></div><div id="sys-wrap"></div>`;
   const tick = async () => {
@@ -277,7 +279,7 @@ function renderLineup(root) {
 }
 
 /* ---------- settings page ---------- */
-const GROUPS = ['General', 'Network', 'Devices', 'Streaming', 'Lineup', 'Guide', 'Diagnostics'];
+const GROUPS = ['General', 'Network', 'Devices', 'Streaming', 'Lineup', 'Guide', 'Advanced', 'Diagnostics'];
 let settingsState = null;
 
 function ctl(f, v, locked, env) {
@@ -295,7 +297,7 @@ function fieldHTML(f, st) {
     <div class="field-text"><label for="f-${esc(f.key.replace(/\W/g, '_'))}">${esc(f.label)}</label>${f.restart ? ' <span class="tag" title="Read once, at start: a change applies after a restart.">restart</span>' : ''}
       <p>${esc(f.help)}</p>
       ${(st.pendingRestart || []).includes(f.key) ? '<p class="note pending">Saved, but still running with the old value until the multiplexer restarts.</p>' : ''}
-      ${env ? `<p class="note">Set by the environment variable <code>${esc(env)}</code>, which overrides this page.</p>` : ''}
+      ${env ? `<p class="note">Set by ${esc(env)}, which overrides this page.</p>` : ''}
       ${saved && !st.locked ? '<p class="note saved">Saved from this page. <button type="button" class="link" data-reset>Use the default again</button></p>' : ''}</div>
     <div class="field-ctl">${ctl(f, v, st.locked, env)}</div></div>`;
 }
@@ -325,7 +327,8 @@ function drawSettings(message) {
   const lock = st.locked ? '<div class="banner"><b>Settings are locked</b><p>settings_locked is set in the config file, so this page only shows the values.</p></div>' : '';
   const waiting = (st.pendingRestart || []).map((k) => (fields[k] || {}).label || k);
   const pendingBanner = waiting.length ? `<div class="banner warn" role="status"><b>Waiting for a restart</b><p>${esc(waiting.join(', '))} ${waiting.length === 1 ? 'was' : 'were'} saved and will take effect when the multiplexer restarts.${st.restartable ? '' : ' Restart the container or service to apply.'}</p></div>` : '';
-  body.innerHTML = banner + lock + pendingBanner + GROUPS.map((g) => {
+  const setupBanner = st.setup ? `<div class="banner warn" role="status"><b>Nothing to serve yet</b><p>${esc(st.setup)}</p></div>` : '';
+  body.innerHTML = setupBanner + banner + lock + pendingBanner + GROUPS.map((g) => {
     const fs = st.schema.filter((f) => f.group === g);
     return fs.length ? `<section class="card settings-group"><h2>${g}</h2>${fs.map((f) => fieldHTML(f, st)).join('')}</section>` : '';
   }).join('') + `<div class="card info-card"><h2>Where things are</h2><dl>

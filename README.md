@@ -297,6 +297,26 @@ disk, so the state directory is kept. Not yet tried on LXC.
 
 ### Configuration
 
+Nearly everything is on the Settings page, so a config file is optional (see Installing). Where the
+configuration comes from, each over the one before: built-in defaults, the config file
+(`-config FILE`, or `/etc/hdhr-mux/config.json` if it exists; never written by the program), the
+settings saved from the web page (`settings.json` in the state directory), environment variables, and
+the command-line options. The log line `config: …` at start says which of them are in use. What can only
+be set in the file: `state_dir` (where the state lives), `settings_locked` (makes
+the page read-only) and `lineup.sources` (named channel maps for scans).
+
+**Running it by hand.** `hdhr-mux` needs no arguments: the working directory is its state directory
+and everything has a default. Port 80 needs privileges (the packaged service has them; run by hand
+without them and the web interface moves to **8080** and says so in the log, as it also does if
+something else holds port 80). `-http :8080` (or `127.0.0.1:8080`) chooses the web port on purpose;
+the Settings page shows it as set by the command line, and `http_listen` there is the way to make it
+permanent. Port 80 is not needed to stream (streams are on 5004); it is only the address clients use
+when they add the multiplexer by IP, and discovery announces whichever port is in use.
+
+**No devices found.** The program keeps running instead of exiting: it stays quiet on the network, the
+web pages say "Nothing to serve yet" and point at the Settings page (add the devices' addresses under
+Devices and press Restart), and it restarts itself when it finds a device.
+
 See [config.example.json](config.example.json). Notable keys:
 
 * `virtual_tuners` – default one per physical tuner.

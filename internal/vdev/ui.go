@@ -158,6 +158,7 @@ type uiActivity struct {
 	Streams  []uiStream        `json:"streams"`
 	Counters map[string]uint64 `json:"counters"`
 	System   uiSystem          `json:"system"`
+	Setup    string            `json:"setup,omitempty"` // why there is nothing to serve yet
 }
 
 // entryFor finds the lineup entry behind what a client asked for: a guide
@@ -372,6 +373,7 @@ func (d *Device) activity() uiActivity {
 		a.Summary.RxBPS += s.RxBPS
 	}
 	a.System = d.system()
+	a.Setup = d.cfg.Setup
 	hs := d.hub.Stats()
 	a.Counters = map[string]uint64{
 		"streamsOpened": hs.StreamsOpened, "failovers": hs.Failovers, "filterUpdates": hs.MaskUpdates,
