@@ -32,25 +32,33 @@ func (d *Device) adminOK(w http.ResponseWriter, r *http.Request, write bool) boo
 		http.Error(w, "settings are not available in this setup", http.StatusNotFound)
 		return false
 	}
+	return d.adminCheck(w, r, write)
+}
+
+// adminCheck is adminOK without the settings manager: whether a request from this address
+// may read (write false) or change (write true) things. w may be nil to just ask.
+func (d *Device) adminCheck(w http.ResponseWriter, r *http.Request, write bool) bool {
+	fail := func(msg string, code int) bool {
+		if w != nil {
+			http.Error(w, msg, code)
+		}
+		return false
+	}
 	host, _, _ := net.SplitHostPort(r.RemoteAddr)
 	ip := net.ParseIP(host)
 	if ip == nil || !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()) {
-		http.Error(w, "settings can only be used from the local network", http.StatusForbidden)
-		return false
+		return fail("settings can only be used from the local network", http.StatusForbidden)
 	}
 	if write {
 		if d.cfg.SettingsLocked {
-			http.Error(w, "settings are locked (settings_locked in the config file)", http.StatusForbidden)
-			return false
+			return fail("settings are locked (settings_locked in the config file)", http.StatusForbidden)
 		}
 		if r.Header.Get(adminHeader) != adminHeaderValue {
-			http.Error(w, "missing "+adminHeader+" header", http.StatusForbidden)
-			return false
+			return fail("missing "+adminHeader+" header", http.StatusForbidden)
 		}
 		if o := r.Header.Get("Origin"); o != "" {
 			if u, err := url.Parse(o); err != nil || u.Host != r.Host {
-				http.Error(w, "cross-site request refused", http.StatusForbidden)
-				return false
+				return fail("cross-site request refused", http.StatusForbidden)
 			}
 		}
 	}

@@ -3402,3 +3402,105 @@ func TestChannelsPageShowsWhereChannelsAre(t *testing.T) {
 		}
 	}
 }
+
+// What a person chooses on the Channels page decides where /auto/ tunes a channel that
+// is received on two RF channels, and which RF channel's guide is served for it.
+func TestChannelChoicesDecideWhereAutoTunesAndWhichGuide(t *testing.T) {
+	testChannels = append(append([]fakehdhr.Channel{}, channels...),
+		fakehdhr.Channel{Frequency: 191000000, TSID: 9, Programs: []fakehdhr.Program{{Number: 5, VChannel: "7.1", Name: "ALPHA-2"}, {Number: 6, VChannel: "9.9", Name: "ZETA"}}})
+	defer func() { testChannels = nil }()
+	e := setup(t, []int{4}, 4, func(c *vdev.Config) { c.GuideHold = 2 * time.Second })
+	e.lu.Replace([]lineup.Entry{
+		{GuideNumber: "7.1", GuideName: "ALPHA", Frequency: 177000000, Program: 1},
+		{GuideNumber: "9.9", GuideName: "ZETA", Frequency: 191000000, Program: 6},
+	})
+	if _, _, err := e.dev.GuidePass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	put := func(number, body string) (int, string) {
+		req, _ := http.NewRequest("PUT", e.api+"/ui/api/channels/"+number, strings.NewReader(body))
+		req.Header.Set("X-Requested-With", "hdhr-mux-ui")
+		req.Header.Set("Content-Type", "application/json")
+		r, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Body.Close()
+		b, _ := io.ReadAll(r.Body)
+		return r.StatusCode, string(b)
+	}
+	programWatched := func() uint16 { // which programme /auto/v7.1 delivers: 1 (at 177 MHz) or 5 (at 191 MHz)
+		c, rc := e.open("/auto/v7.1")
+		if c == nil {
+			t.Fatalf("/auto/v7.1 refused: %d %v", rc.StatusCode, rc.Header)
+		}
+		defer c.close()
+		an := analyze(t, c.read(t, 188*60))
+		for p := range an.esProgs {
+			return p
+		}
+		t.Fatal("no programme")
+		return 0
+	}
+	if p := programWatched(); p != 1 {
+		t.Fatalf("by default the lineup's place (177 MHz, programme 1): got %d", p)
+	}
+	// first choice: the other place
+	if code, body := put("7.1", `{"video":191000000}`); code != 200 {
+		t.Fatalf("PUT: %d %s", code, body)
+	}
+	waitFor(t, "the first choice is used", 3*time.Second, func() bool { return programWatched() == 5 })
+	// switched off: the other place is used even when it is not the first choice
+	put("7.1", `{"off":[191000000]}`)
+	waitFor(t, "a switched-off place is not used", 3*time.Second, func() bool { return programWatched() == 1 })
+
+	// the guide: automatic, then a chosen place
+	titles := func() string {
+		var out []map[string]any
+		getJSON(t, e.api+"/epg.json", &out)
+		for _, c := range out {
+			if c["GuideNumber"] == "7.1" {
+				if evs, _ := c["Events"].([]any); len(evs) > 0 {
+					return fmt.Sprint(evs[0].(map[string]any)["Title"])
+				}
+			}
+		}
+		return ""
+	}
+	put("7.1", `{}`)
+	auto := titles()
+	put("7.1", `{"guide":191000000}`)
+	chosen191 := titles()
+	put("7.1", `{"guide":177000000}`)
+	chosen177 := titles()
+	if chosen191 == "" || chosen177 == "" || chosen191 == chosen177 || (auto != chosen191 && auto != chosen177) {
+		t.Errorf("guide titles: automatic %q, 191 MHz %q, 177 MHz %q", auto, chosen191, chosen177)
+	}
+
+	// switched off everywhere: unavailable, and left out of the lineup
+	put("7.1", `{"off":[177000000,191000000]}`)
+	if _, rc := e.open("/auto/v7.1"); rc.StatusCode != 404 {
+		t.Errorf("a channel switched off everywhere should be unknown: %d", rc.StatusCode)
+	}
+	var lu []map[string]any
+	getJSON(t, e.api+"/lineup.json", &lu)
+	for _, m := range lu {
+		if m["GuideNumber"] == "7.1" {
+			t.Error("7.1 is still in the lineup")
+		}
+	}
+	// and what is not allowed
+	if code, _ := put("7.1", `{"off":[999000000]}`); code != 400 {
+		t.Errorf("an RF channel the channel is not received on was accepted: %d", code)
+	}
+	if code, _ := put("7.1", `{"off":[177000000],"video":177000000}`); code != 400 {
+		t.Errorf("a first choice that is switched off was accepted: %d", code)
+	}
+	if code, _ := put("1.1", `{}`); code != 404 {
+		t.Errorf("an unknown channel: %d", code)
+	}
+	req, _ := http.NewRequest("PUT", e.api+"/ui/api/channels/7.1", strings.NewReader(`{}`))
+	if r, err := http.DefaultClient.Do(req); err != nil || r.StatusCode != 403 {
+		t.Errorf("a PUT without the admin header: %v %v", err, r)
+	}
+}

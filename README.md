@@ -433,6 +433,18 @@ are embedded in the binary.
   "All channels" shows every channel. It is learned from the streams and guide passes that tune the
   channels anyway and kept in `<state_dir>/rfmap.json`, so it fills in over the first guide pass
   after a new start; nothing is tuned just for it.
+  The page is also where the choices are made (saved in `<state_dir>/channels.json`; they apply at once,
+  and need the same permission as the settings page):
+  * **Video** (a checkbox per RF channel): where `/auto/` may tune the channel. Several can be on. A
+    channel switched off at every place is unavailable: it is left out of the lineup, the playlist and
+    the guide, and its RF channel is not tuned for the guide when no other channel needs it.
+  * **First**: the place tried first. A request first rides a session that is already open at any allowed
+    place, then tunes the first choice, then the others, one after the other until one works. Without a
+    choice the place from the devices' lineups is first. Other places are used only when
+    `auto_join_other_locations` is on (or the place is the chosen first).
+  * **Guide**: which RF channel the guide comes from. Without a choice it is the one that goes furthest
+    ahead. Guides of different RF channels are never merged.
+  Each choice has a "use the lineup's place" / "use automatic" link to undo it.
 * **Appearance** (the half-moon button) – System / Light / Dark, and a choice of theme for each:
   Paper, Mist, Mint, Lilac (light) and Slate, Midnight, Dusk, Ember (dark). None of them is pure white
   or pure black. *System* follows the device and switches between your light and dark theme by

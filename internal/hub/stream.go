@@ -252,6 +252,7 @@ func (st *stream) publishGuide(force bool) {
 		st.fmu.Lock()
 		st.vct = vct
 		st.fmu.Unlock()
+		snap.Frequency = st.spec.Frequency
 		st.noteRFGuide(snap)
 		st.h.publishGuide(snap)
 	}

@@ -35,6 +35,7 @@ func (d *Device) SetGuide(s *guide.Store) {
 	d.guide.mu.Lock()
 	d.guide.store = s
 	d.guide.mu.Unlock()
+	s.SetChooser(func(number string) uint64 { return d.prefs.Get(number).Guide })
 	d.hub.SetGuideSink(func(g psip.Guide) { s.Merge(g, time.Now()) })
 }
 
@@ -71,6 +72,14 @@ func (d *Device) GuidePass(ctx context.Context) (done, total int, err error) {
 			freqs = append(freqs, e.Frequency)
 		}
 	}
+	// an RF channel every channel on it is switched off for is not tuned for its guide
+	kept := freqs[:0]
+	for _, f := range freqs {
+		if !d.rfAllOff(f) {
+			kept = append(kept, f)
+		}
+	}
+	freqs = kept
 	sort.Slice(freqs, func(i, j int) bool { return freqs[i] < freqs[j] })
 	hold := d.lv().GuideHold
 	if hold == 0 {
