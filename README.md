@@ -445,7 +445,7 @@ are embedded in the binary.
     place, then tunes the first choice, then the others, one after the other until one works. Without a
     choice the place from the devices' lineups is first. Other places are used only when
     `auto_join_other_locations` is on (or the place is the chosen first).
-  * **Guide**: which RF channel the guide comes from. Without a choice it is the one that goes furthest
+  * **EPG**: which RF channel the guide comes from. Without a choice it is the one that goes furthest
     ahead. Guides of different RF channels are never merged.
   Each choice has a "use the lineup's place" / "use automatic" link to undo it.
 * **Appearance** (the half-moon button) – System / Light / Dark, and a choice of theme for each:

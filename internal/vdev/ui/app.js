@@ -233,7 +233,7 @@ function lineupRows() {
   }).map((c) => {
     const p = c.now, done = p ? pct((nowSec - p.start) / Math.max(1, p.end - p.start) * 100) : 0;
     return `<tr data-url="${esc(c.url)}"><td class="c-num"><span class="chan">${esc(c.number)}</span></td>
-      <td><b>${esc(c.name)}</b>${c.hd ? '<span class="tag">HD</span>' : ''}${c.modulation === 'atsc3' ? '<span class="tag">3.0</span>' : ''}${c.watching ? `<span class="tag live">${c.watching} watching</span>` : ''}</td>
+      <td><b class="nm">${esc(c.name)}</b>${c.hd ? '<span class="tag">HD</span>' : ''}${c.modulation === 'atsc3' ? '<span class="tag">3.0</span>' : ''}${c.watching ? `<span class="tag live">${c.watching} watching</span>` : ''}</td>
       <td class="prog">${p ? `<div class="title">${p.placeholder ? '<i style="color:var(--muted);font-weight:450">To be announced</i>' : esc(p.title)}</div><div class="progress"><i style="width:${done}%"></i></div><small>${clock(p.start)} – ${clock(p.end)}</small>` : '<small>no guide data</small>'}</td>
       <td class="prog c-next">${c.next ? `<div class="title">${c.next.placeholder ? '<i style="color:var(--muted);font-weight:450">To be announced</i>' : esc(c.next.title)}</div><small>${clock(c.next.start)}</small>` : ''}</td>
       <td class="c-rf">${mhz(c.frequency)}${c.codec ? `<br><small>${esc(c.codec)}</small>` : ''}</td>
@@ -390,7 +390,7 @@ async function restartNow() {
 /* ---------- channels page: where each channel is on the air, and the choices ---------- */
 function guideCell(l) {
   if (!l.guide) return '<span class="muted" title="This RF channel has not been read yet">not read yet</span>';
-  if (!l.guideEvents) return '<span class="bad-text" title="This RF channel sends no programme guide for the channel">none</span>';
+  if (!l.guideEvents) return '<span class="bad-text" title="This RF channel sends no EPG for the channel">none</span>';
   return `<b>${l.guideHours >= 10 ? Math.round(l.guideHours) : l.guideHours.toFixed(1)}</b> h`;
 }
 function signalCell(l) {
@@ -407,7 +407,7 @@ function chanControls(c, l, ed, single) {
   if (single) return allow;
   return allow +
     `<td class="c-ctl"><input type="radio" name="first-${esc(c.number)}" data-act="first" data-freq="${l.frequency}" ${l.first ? 'checked' : ''} ${l.off ? 'disabled' : dis} aria-label="Try ${mhz(l.frequency)} first"></td>` +
-    `<td class="c-ctl"><input type="radio" name="guide-${esc(c.number)}" data-act="guide" data-freq="${l.frequency}" ${l.used ? 'checked' : ''} ${dis} aria-label="Take the guide from ${mhz(l.frequency)}"></td>`;
+    `<td class="c-ctl"><input type="radio" name="guide-${esc(c.number)}" data-act="guide" data-freq="${l.frequency}" ${l.used ? 'checked' : ''} ${dis} aria-label="Take the EPG from ${mhz(l.frequency)}"></td>`;
 }
 function locationRows(c, ed) {
   return c.locations.map((l) => `<tr class="${l.chosen ? 'chosen' : ''} ${l.off ? 'off' : ''}">
@@ -421,7 +421,7 @@ function channelNotes(c, ed) {
   const first = c.locations.find((l) => l.first);
   const bits = [];
   bits.push(`Video: tried first on <b>${first ? mhz(first.frequency) : 'nothing'}</b>${c.video ? ' (your choice) ' + (ed ? '<button type="button" class="link" data-act="reset-first">use the lineup\'s place</button>' : '') : ''}; the others are used when the first cannot be tuned or is already open.`);
-  bits.push(`Guide: ${c.guide ? `from <b>${mhz(c.guide)}</b> (your choice) ` + (ed ? '<button type="button" class="link" data-act="reset-guide">use automatic</button>' : '') : `automatic${used ? ` (<b>${mhz(used.frequency)}</b>, the one that goes furthest ahead)` : ': there is no guide for this channel yet'}`}.`);
+  bits.push(`EPG: ${c.guide ? `from <b>${mhz(c.guide)}</b> (your choice) ` + (ed ? '<button type="button" class="link" data-act="reset-guide">use automatic</button>' : '') : `automatic${used ? ` (<b>${mhz(used.frequency)}</b>, the one that goes furthest ahead)` : ': there is no EPG for this channel yet'}`}.`);
   return `<p class="chan-notes">${bits.join('<br>')}</p>`;
 }
 function channelCard(c, ed) {
@@ -429,11 +429,11 @@ function channelCard(c, ed) {
   return `<div class="card chan-card ${multi ? 'multi' : ''} ${c.unavailable ? 'unavail' : ''}" data-num="${esc(c.number)}"><div class="chan-head"><span class="chan">${esc(c.number)}</span><b>${esc(c.name)}</b>
     ${multi ? `<span class="tag" title="This channel is received on more than one RF channel">${c.locations.length} RF channels</span>` : ''}${c.hd ? ' <span class="tag">HD</span>' : ''}${c.drm ? ' <span class="tag" title="Encrypted">DRM</span>' : ''}</div>
     ${c.unavailable ? '<div class="banner warn inline" role="status"><b>Switched off everywhere</b><p>This channel is left out of the lineup and the playlist until one of its RF channels is switched on again.</p></div>' : ''}
-    ${c.locations.length ? `<table class="loc-table"><thead><tr><th>RF channel</th><th>Name there</th><th>Program</th><th>Signal <small>strength / quality / symbols</small></th><th>Guide ahead</th><th class="c-ctl" title="May be used for video">Video</th><th class="c-ctl" title="Tried first for video">First</th><th class="c-ctl" title="The programme guide is taken from here">Guide</th></tr></thead><tbody>${locationRows(c, ed)}</tbody></table>${multi ? channelNotes(c, ed) : ''}`
+    ${c.locations.length ? `<table class="loc-table"><thead><tr><th>RF channel</th><th>Name there</th><th>Program</th><th>Signal <small>strength / quality / symbols</small></th><th>EPG ahead</th><th class="c-ctl" title="May be used for video">Video</th><th class="c-ctl" title="Tried first for video">First</th><th class="c-ctl" title="The programme guide (EPG) is taken from here">EPG</th></tr></thead><tbody>${locationRows(c, ed)}</tbody></table>${multi ? channelNotes(c, ed) : ''}`
       : '<p class="muted pad">Not located yet: the multiplexer finds out the first time it tunes this channel.</p>'}</div>`;
 }
 function compactTable(list, ed) {
-  return `<div class="card table-card"><table class="loc-table single"><thead><tr><th>Ch</th><th>Channel</th><th>RF channel</th><th>Signal <small>strength / quality / symbols</small></th><th>Guide ahead</th><th class="c-ctl" title="May be used for video">On</th></tr></thead><tbody>` +
+  return `<div class="card table-card"><table class="loc-table single"><thead><tr><th>Ch</th><th>Channel</th><th>RF channel</th><th>Signal <small>strength / quality / symbols</small></th><th>EPG ahead</th><th class="c-ctl" title="May be used for video">On</th></tr></thead><tbody>` +
     list.map((c) => { const l = c.locations[0]; return l ? `<tr class="${l.off ? 'off' : ''}" data-num="${esc(c.number)}"><td><span class="chan">${esc(c.number)}</span></td><td>${esc(c.name)}${c.hd ? ' <span class="tag">HD</span>' : ''}</td><td class="mono">${mhz(l.frequency)}</td><td>${signalCell(l)}</td><td>${guideCell(l)}</td>${chanControls(c, l, ed, true)}</tr>` : `<tr><td><span class="chan">${esc(c.number)}</span></td><td>${esc(c.name)}</td><td colspan="4" class="muted">not located yet</td></tr>`; }).join('') + '</tbody></table></div>';
 }
 function updateChannels() {
@@ -444,7 +444,7 @@ function updateChannels() {
   if (chans.filter === 'dup') list = list.filter((c) => c.locations.length > 1);
   if (q) list = list.filter((c) => (c.number + ' ' + c.name + ' ' + c.locations.map((l) => l.name + ' ' + mhz(l.frequency)).join(' ')).toLowerCase().includes(q));
   $('#chan-count').textContent = `${d.channels.length} channels, ${d.duplicates} on more than one RF channel, ${d.known} RF channel${d.known === 1 ? '' : 's'} read so far`;
-  const hint = !d.known ? '<div class="banner" role="status"><b>Still learning</b><p>This table fills in as the multiplexer tunes channels and collects the guide (a pass runs about an hour apart; the first one starts a minute or two after start-up).</p></div>' : '';
+  const hint = !d.known ? '<div class="banner" role="status"><b>Still learning</b><p>This table fills in as the multiplexer tunes channels and collects the EPG (a pass runs about an hour apart; the first one starts a minute or two after start-up).</p></div>' : '';
   const ro = !ed ? '<div class="banner" role="status"><b>Read only</b><p>Choices can only be changed from the local network, and not while settings are locked.</p></div>' : '';
   const multi = list.filter((c) => c.locations.length > 1), single = list.filter((c) => c.locations.length <= 1);
   patch($('#chan-list'), ro + hint + (list.length ? multi.map((c) => channelCard(c, ed)).join('') +
