@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"hdhrmux/internal/hdhrproto"
 	"hdhrmux/internal/hub"
 	"hdhrmux/internal/lineup"
+	"hdhrmux/internal/rfmap"
 )
 
 type Config struct {
@@ -185,6 +187,7 @@ func (c *Config) defaults() {
 
 type Device struct {
 	cfg    Config
+	rf     *rfmap.Store
 	sys    sysSampler
 	live   liveState
 	hub    *hub.Hub
@@ -229,6 +232,17 @@ func New(cfg Config, h *hub.Hub, lu *lineup.Lineup) (*Device, error) {
 	}
 	d := &Device{cfg: cfg, hub: h, lineup: lu, quit: make(chan struct{}), source: cfg.DefaultSource}
 	d.live.init(liveOf(&cfg))
+	rfPath := ""
+	if cfg.StateDir != "" {
+		rfPath = filepath.Join(cfg.StateDir, "rfmap.json")
+	}
+	rf, err := rfmap.Open(rfPath)
+	if err != nil {
+		log.Printf("rf channel table: %v (starting with an empty one)", err)
+		rf, _ = rfmap.Open("")
+	}
+	d.rf = rf
+	h.SetRFStore(rf)
 	lu.SetHideATSC3(cfg.HideATSC3)
 	resetStreamCounts() // the counters are process-wide; a new device starts them afresh
 	h.SetLearner(d.learn)
@@ -344,6 +358,7 @@ func (d *Device) ID() uint32       { return d.cfg.DeviceID }
 
 func (d *Device) Close() {
 	close(d.quit)
+	defer d.rf.Flush()
 	if d.ssdp != nil {
 		d.ssdp.stop()
 	}
