@@ -70,6 +70,7 @@ var (
 	testModels   []string                    // device models by index (default: ATSC 3.0 capable)
 	testSEQRamp  time.Duration               // fake devices report a symbol quality of 0 this long after a tune
 	testSettle   time.Duration               // hub.SetSignalSettle
+	testNoTuning bool                        // fake devices ignore lineup.json?tuning (older firmware)
 )
 
 func model(i int) string {
@@ -84,7 +85,7 @@ func setup(t *testing.T, physTuners []int, virtual int, mod func(*vdev.Config)) 
 	e := &env{t: t}
 	var addrs []string
 	for i, n := range physTuners {
-		f, err := fakehdhr.Start(fakehdhr.Config{DeviceID: hdhrproto.MakeDeviceID(0x10200000 + uint32(i)<<8), Tuners: n, Channels: pick(testChannels, channels), Model: model(i), SEQRamp: testSEQRamp})
+		f, err := fakehdhr.Start(fakehdhr.Config{DeviceID: hdhrproto.MakeDeviceID(0x10200000 + uint32(i)<<8), Tuners: n, Channels: pick(testChannels, channels), Model: model(i), SEQRamp: testSEQRamp, NoTuning: testNoTuning})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -690,6 +691,7 @@ func TestIdleTunerReaped(t *testing.T) {
 }
 
 func TestScan(t *testing.T) {
+	withoutTuningInfo(t)
 	e := setup(t, []int{1}, 1, func(c *vdev.Config) { c.ScanFrom, c.ScanTo = 5, 14 })
 	e.lu.Replace(nil)
 	resp, err := http.Post(e.api+"/lineup.post?scan=start&source=Antenna", "", nil)
@@ -1409,6 +1411,7 @@ func TestScanTunerLimit(t *testing.T) {
 // The channel list comes from the devices' own lineups; where a channel is on
 // the air is not known until it is learned.
 func TestLineupFromDevices(t *testing.T) {
+	withoutTuningInfo(t)
 	e := setup(t, []int{2}, 2, nil)
 	e.lu.Replace(nil)
 	if err := e.dev.RefreshLineup(context.Background()); err != nil {
@@ -1443,6 +1446,7 @@ func TestLineupFromDevices(t *testing.T) {
 // A channel of unknown location is found by tuning it by name once; the whole
 // multiplex is learned from that, so its neighbours need no further probe.
 func TestLazyLearning(t *testing.T) {
+	withoutTuningInfo(t)
 	e := setup(t, []int{2}, 2, nil)
 	e.lu.Replace(nil)
 	if err := e.dev.RefreshLineup(context.Background()); err != nil {
@@ -3265,5 +3269,75 @@ func TestGuidePassLearnsWhereChannelsAre(t *testing.T) {
 	}
 	if total != 2 || done != 2 {
 		t.Errorf("the pass listened to %d of %d multiplexes, want 2 of 2", done, total)
+	}
+}
+
+// withoutTuningInfo makes the simulated devices answer lineup.json?tuning as older
+// firmware does (no frequencies): the multiplexer then has to learn where channels
+// are by tuning them.
+func withoutTuningInfo(t *testing.T) {
+	t.Helper()
+	old := testNoTuning
+	testNoTuning = true
+	t.Cleanup(func() { testNoTuning = old })
+}
+
+// The devices' lineups say where each channel is on the air (lineup.json?tuning), so
+// the multiplexer knows every channel's place without tuning anything, and a stream
+// seen elsewhere does not move it. Its own lineup.json answers ?tuning the same way.
+func TestPlacementComesFromTheDevices(t *testing.T) {
+	e := setup(t, []int{2}, 2, nil)
+	if err := e.dev.RefreshLineup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for g, want := range map[string]struct {
+		freq uint64
+		prog uint16
+		mod  string
+	}{
+		"7.1": {177000000, 1, "8vsb"}, "7.2": {177000000, 2, "8vsb"}, "14.3": {473000000, 3, "8vsb"},
+		"36.1": {617000000, 1, "8vsb"}, "104.1": {605000000, 1376, "atsc3"},
+	} {
+		en, ok := e.lu.Find(g)
+		if !ok || en.Frequency != want.freq || en.Program != want.prog || en.Modulation != want.mod {
+			t.Errorf("%s: %+v, want %d Hz program %d %s", g, en, want.freq, want.prog, want.mod)
+		}
+	}
+	if en, _ := e.lu.Find("7.1"); en.TSID != 1 {
+		t.Errorf("7.1 transport stream id %d, want 1", en.TSID)
+	}
+	for _, f := range e.fakes {
+		if f.Peak() != 0 {
+			t.Errorf("a tuner was used to learn that (peak %d)", f.Peak())
+		}
+	}
+
+	// a stream seen on another RF channel does not move a placed channel
+	e.lu.LearnRF([]lineup.Entry{{GuideNumber: "7.1", Frequency: 999000000, Program: 9, Modulation: "8vsb"}}, false)
+	if en, _ := e.lu.Find("7.1"); en.Frequency != 177000000 {
+		t.Errorf("7.1 moved to %d Hz", en.Frequency)
+	}
+
+	// the multiplexer's own lineup answers ?tuning like a device
+	get := func(q string) []map[string]any {
+		var out []map[string]any
+		getJSON(t, e.api+"/lineup.json"+q, &out)
+		return out
+	}
+	plain, tuned := get(""), get("?tuning")
+	find := func(l []map[string]any, g string) map[string]any {
+		for _, m := range l {
+			if m["GuideNumber"] == g {
+				return m
+			}
+		}
+		return nil
+	}
+	if m := find(plain, "7.1"); m == nil || m["Frequency"] != nil {
+		t.Errorf("plain lineup.json should not carry tuning fields: %v", m)
+	}
+	m := find(tuned, "7.1")
+	if m == nil || m["Frequency"] != float64(177000000) || m["ProgramNumber"] != float64(1) || m["Modulation"] != "8vsb" || m["TransportStreamID"] != float64(1) {
+		t.Errorf("lineup.json?tuning for 7.1: %v", m)
 	}
 }

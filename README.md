@@ -130,16 +130,21 @@ still share one) and the multiplexer does no demuxing there.
 | `/lineup/scan` control variable (`get` → `state=… progress=…% found=…`, `set start` / `abort`) | yes |
 | Transcoding, other channel maps, firmware upgrade, DVR/storage | no |
 
-## The lineup: devices decide what exists, streams teach where it is
+## The lineup: devices decide what exists and where
 
 The multiplexer does **not** scan to build its channel list. The channel list is
-the union of the physical devices' own `/lineup.json` (names, codecs, HD/DRM
-flags; re-read every `lineup.refresh`, default 10 min, and on a rescan), so it
-matches what the firmware keeps, including quiet subchannels a scan can miss.
-What the devices' lineups do not say is where a channel is on the air, which
-sharing needs. That is learned, and remembered in `<state_dir>/lineup.json`:
+the union of the physical devices' own `/lineup.json?tuning` (re-read every
+`lineup.refresh`, default 10 min, and on a rescan), so it matches what the firmware keeps,
+including quiet subchannels a scan can miss. Besides names, codecs and HD/DRM flags, a device
+answers `?tuning` with where each channel is on the air (frequency, modulation, program number and
+transport stream ID), and the lineup follows that: the first device that lists a channel decides, and
+a stream seen on another RF channel does not move it, so a station carried on two RF channels is not
+flipped back and forth. Nothing is tuned to learn it. The multiplexer's own `lineup.json?tuning`
+answers the same way. The placement is remembered in `<state_dir>/lineup.json`. Where a device
+does not say (older firmware), it is learned:
 
-* **From every running stream.** A tuner's program list (`streaminfo`) names every
+* **From a running stream** (only for a channel the devices did not place). A tuner's program list
+  (`streaminfo`) names every
   channel of its multiplex, so watching one channel teaches the whole multiplex.
 * **On first use.** For a channel not yet located, the multiplexer tunes it by
   name (`/tunerN/vX.Y`, which the device resolves from its own lineup) on a free

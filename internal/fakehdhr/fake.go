@@ -50,6 +50,9 @@ type Config struct {
 	Model      string // /sys/model, default hdhomerun5_atsc3
 	// ScanDuration is how long a scan started over HTTP takes (default 800 ms).
 	ScanDuration time.Duration
+	// NoTuning makes lineup.json ignore ?tuning, as older firmware does: the channels then
+	// carry no frequency until somebody tunes them.
+	NoTuning bool
 	// SEQRamp makes a freshly tuned tuner report a symbol quality of 0 for this long, as
 	// real tuners do while their figures climb.
 	SEQRamp time.Duration

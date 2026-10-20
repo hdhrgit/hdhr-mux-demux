@@ -101,22 +101,29 @@ func (d *Device) handleDiscover(w http.ResponseWriter, r *http.Request) {
 type lineupJSONEntry struct {
 	GuideNumber string
 	GuideName   string
-	Frequency   string `json:",omitempty"`
-	Modulation  string `json:",omitempty"`
-	VideoCodec  string `json:",omitempty"`
-	AudioCodec  string `json:",omitempty"`
-	HD          int    `json:",omitempty"`
-	Favorite    int    `json:",omitempty"`
-	DRM         int    `json:",omitempty"`
-	URL         string
+	// with ?tuning, as the devices answer: where the channel is on the air
+	TransportStreamID uint16 `json:",omitempty"`
+	Modulation        string `json:",omitempty"`
+	Frequency         uint64 `json:",omitempty"`
+	ProgramNumber     uint16 `json:",omitempty"`
+	VideoCodec        string `json:",omitempty"`
+	AudioCodec        string `json:",omitempty"`
+	HD                int    `json:",omitempty"`
+	Favorite          int    `json:",omitempty"`
+	DRM               int    `json:",omitempty"`
+	URL               string
 }
 
 func (d *Device) handleLineupJSON(w http.ResponseWriter, r *http.Request) {
 	sbase := d.streamBase(r)
 	all := r.URL.Query().Get("show") == "found"
+	tuning := r.URL.Query().Has("tuning")
 	out := []lineupJSONEntry{}
 	for _, e := range d.lineup.Entries(all) {
 		j := lineupJSONEntry{GuideNumber: e.GuideNumber, GuideName: e.GuideName, VideoCodec: e.VideoCodec, AudioCodec: e.AudioCodec, URL: sbase + "/auto/v" + e.GuideNumber}
+		if tuning && e.Frequency != 0 {
+			j.TransportStreamID, j.Modulation, j.Frequency, j.ProgramNumber = e.TSID, e.Modulation, e.Frequency, e.Program
+		}
 		if e.HD {
 			j.HD = 1
 		}

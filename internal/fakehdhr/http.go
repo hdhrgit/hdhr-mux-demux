@@ -36,13 +36,26 @@ func (d *Device) serveLineup(w http.ResponseWriter, r *http.Request) {
 		AudioCodec  string
 		HD          int
 		URL         string
+		// ?tuning, as the real devices answer
+		TransportStreamID uint16 `json:",omitempty"`
+		Modulation        string `json:",omitempty"`
+		Frequency         uint64 `json:",omitempty"`
+		ProgramNumber     uint16 `json:",omitempty"`
 	}
+	tuning := r.URL.Query().Has("tuning") && !d.cfg.NoTuning
 	out := []item{}
 	d.mu.Lock()
 	for _, c := range d.cfg.Channels {
 		for _, p := range c.Programs {
 			if !d.hidden[p.VChannel] {
-				out = append(out, item{p.VChannel, p.Name, "MPEG2", "AC3", 1, fmt.Sprintf("http://127.0.0.1:%d/auto/v%s", d.StreamPort(), p.VChannel)})
+				it := item{GuideNumber: p.VChannel, GuideName: p.Name, VideoCodec: "MPEG2", AudioCodec: "AC3", HD: 1, URL: fmt.Sprintf("http://127.0.0.1:%d/auto/v%s", d.StreamPort(), p.VChannel)}
+				if tuning {
+					it.TransportStreamID, it.Frequency, it.ProgramNumber, it.Modulation = c.TSID, c.Frequency, p.Number, "8vsb"
+					if c.ATSC3 {
+						it.Modulation = "atsc3"
+					}
+				}
+				out = append(out, it)
 			}
 		}
 	}

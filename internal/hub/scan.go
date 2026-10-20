@@ -225,13 +225,18 @@ func FetchLineups(ctx context.Context, devs []*upstream.Device) ([]lineup.Device
 		HD          int
 		Favorite    int
 		DRM         int
+		// lineup.json?tuning: where the device found the channel on the air
+		Frequency         uint64
+		Modulation        string
+		ProgramNumber     uint16
+		TransportStreamID uint16
 	}
 	var out []lineup.DeviceEntry
-	seen := map[string]bool{}
+	at := map[string]int{} // guide number -> index in out
 	answered := 0
 	client := &http.Client{Timeout: 8 * time.Second}
 	for _, d := range devs {
-		url := "http://" + net.JoinHostPort(d.IP.String(), strconv.Itoa(d.WebPort)) + "/lineup.json"
+		url := "http://" + net.JoinHostPort(d.IP.String(), strconv.Itoa(d.WebPort)) + "/lineup.json?tuning"
 		req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 		resp, err := client.Do(req)
 		if err != nil {
@@ -245,15 +250,25 @@ func FetchLineups(ctx context.Context, devs []*upstream.Device) ([]lineup.Device
 		}
 		answered++
 		for _, e := range list {
-			if e.GuideNumber == "" || seen[e.GuideNumber] {
+			if e.GuideNumber == "" {
 				continue
 			}
-			seen[e.GuideNumber] = true
-			out = append(out, lineup.DeviceEntry{
+			de := lineup.DeviceEntry{
 				GuideNumber: e.GuideNumber, GuideName: e.GuideName,
 				VideoCodec: e.VideoCodec, AudioCodec: e.AudioCodec,
 				HD: e.HD == 1, Favorite: e.Favorite == 1, DRM: e.DRM == 1,
-			})
+				Frequency: e.Frequency, Modulation: e.Modulation, Program: e.ProgramNumber, TSID: e.TransportStreamID,
+			}
+			if i, seen := at[e.GuideNumber]; seen {
+				// the first device that lists a channel names it; a later one only says
+				// where it is if the first did not
+				if out[i].Frequency == 0 && de.Frequency != 0 {
+					out[i].Frequency, out[i].Modulation, out[i].Program, out[i].TSID = de.Frequency, de.Modulation, de.Program, de.TSID
+				}
+				continue
+			}
+			at[e.GuideNumber] = len(out)
+			out = append(out, de)
 		}
 	}
 	return out, answered
@@ -329,6 +344,14 @@ func scanChannel(ctx context.Context, lease *upstream.Lease, cfg ScanConfig, ch 
 
 // ParseStreamInfo converts a /tunerN/streaminfo reply into lineup entries.
 func ParseStreamInfo(info string, freq uint64, modulation, source string) []lineup.Entry {
+	var tsid uint16
+	for _, line := range strings.Split(info, "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "tsid=0x"); ok {
+			if n, err := strconv.ParseUint(strings.TrimSpace(v), 16, 16); err == nil {
+				tsid = uint16(n)
+			}
+		}
+	}
 	var out []lineup.Entry
 	for _, line := range strings.Split(info, "\n") {
 		line = strings.TrimSpace(line)
@@ -349,7 +372,7 @@ func ParseStreamInfo(info string, freq uint64, modulation, source string) []line
 			continue
 		}
 		name := strings.Join(fields[1:], " ")
-		e := lineup.Entry{GuideNumber: vch, Frequency: freq, Program: uint16(prog), Modulation: modulation, Source: source}
+		e := lineup.Entry{GuideNumber: vch, Frequency: freq, Program: uint16(prog), Modulation: modulation, Source: source, TSID: tsid}
 		switch {
 		case strings.HasSuffix(name, "(control)"):
 			continue

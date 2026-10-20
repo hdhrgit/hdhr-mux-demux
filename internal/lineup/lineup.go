@@ -19,6 +19,7 @@ type Entry struct {
 	Frequency     uint64 `json:"Frequency"`
 	Program       uint16 `json:"Program"`
 	Modulation    string `json:"Modulation,omitempty"`
+	TSID          uint16 `json:"TSID,omitempty"` // the multiplex's transport stream id
 	Source        string `json:"Source,omitempty"`
 	DRM           bool   `json:"DRM,omitempty"`
 	Favorite      bool   `json:"Favorite,omitempty"`
@@ -181,6 +182,11 @@ type DeviceEntry struct {
 	HD          bool
 	Favorite    bool
 	DRM         bool
+	// Where the device found the channel on the air (from lineup.json?tuning), if it says.
+	Frequency  uint64
+	Modulation string
+	Program    uint16
+	TSID       uint16
 }
 
 // Merge makes the devices' lineups the channel list: names and codec, HD and
@@ -207,6 +213,18 @@ func (l *Lineup) Merge(devs []DeviceEntry) (added, removed int, err error) {
 		}
 		e.GuideName, e.VideoCodec, e.AudioCodec, e.HD = d.GuideName, d.VideoCodec, d.AudioCodec, d.HD
 		e.DRM = e.DRM || d.DRM
+		// The devices say where each channel is on the air, and that is what the lineup
+		// follows: a station carried on two RF channels is not moved back and forth by
+		// whichever stream was last seen.
+		if d.Frequency != 0 {
+			e.Frequency, e.Program = d.Frequency, d.Program
+			if d.Modulation != "" {
+				e.Modulation = d.Modulation
+			}
+			if d.TSID != 0 {
+				e.TSID = d.TSID
+			}
+		}
 		out = append(out, e)
 	}
 	for g := range old {
@@ -245,6 +263,21 @@ func (l *Lineup) LearnRF(es []Entry, addUnknown bool) (changed int) {
 			continue
 		}
 		e := &l.entries[i]
+		if !addUnknown && e.Frequency != 0 {
+			// Already placed (by the devices' lineups): a stream seen on another RF channel
+			// does not move it. Only what is missing about it is filled in.
+			if n.Frequency == e.Frequency {
+				if e.TSID == 0 && n.TSID != 0 {
+					e.TSID = n.TSID
+					changed++
+				}
+				if n.DRM && !e.DRM {
+					e.DRM = true
+					changed++
+				}
+			}
+			continue
+		}
 		if e.Frequency == n.Frequency && e.Program == n.Program && e.Modulation == n.Modulation {
 			continue
 		}
