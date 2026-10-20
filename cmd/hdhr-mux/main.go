@@ -10,11 +10,13 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -58,6 +60,7 @@ func run() int {
 	scan := flag.Bool("scan", false, "scan for channels at startup even if a lineup exists")
 	ignoreSettings := flag.Bool("ignore-settings", false, "ignore settings.json (saved from the web interface) in the state directory: the way out if a saved setting stops start-up")
 	showVersion := flag.Bool("version", false, "print the version and exit")
+	httpAddr := flag.String("http", "", "web interface address, for example :8080 or 127.0.0.1:8080 (overrides the http_listen setting; without either it is :80, or :8080 when :80 is not allowed or in use)")
 	flag.Parse()
 	*cfgPath = pickConfig(*cfgPath, func(p string) bool { _, err := os.Stat(p); return err == nil })
 	if *showVersion {
@@ -72,7 +75,15 @@ func run() int {
 		load = config.LoadWithoutSettings
 		log.Printf("ignoring settings.json")
 	}
-	cfg, err := load(*cfgPath)
+	// the same way at start and whenever the settings page applies changes
+	loadCfg := func() (*config.Config, error) {
+		c, err := load(*cfgPath)
+		if err == nil {
+			applyOverrides(c, *httpAddr)
+		}
+		return c, err
+	}
+	cfg, err := loadCfg()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -117,10 +128,32 @@ func run() int {
 	if tuners == 0 {
 		tuners = pool.TotalTuners()
 	}
+	setup := ""
 	if tuners == 0 {
-		log.Fatal("no physical HDHomeRun tuners found; check the network or set upstream.devices / virtual_tuners")
+		// Nothing to serve, but the web page is how somebody fixes that: run without
+		// advertising, and start over when a device shows up.
+		tuners = 1
+		setup = "No HDHomeRun devices were found on this network. Check that they are on the same network, or add their addresses under Devices on the Settings page and restart. The multiplexer keeps looking and restarts itself when it finds one."
+		log.Print(setup)
 	}
 	go pool.Run(ctx)
+	if setup != "" {
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(5 * time.Second):
+				}
+				if pool.TotalTuners() > 0 {
+					log.Printf("a device was found: restarting")
+					restart.Store(true)
+					stop()
+					return
+				}
+			}
+		}()
+	}
 
 	lu, err := lineup.Open(filepath.Join(cfg.StateDir, "lineup.json"))
 	if err != nil {
@@ -132,7 +165,11 @@ func run() int {
 
 	guideRefresh, refresh := time.Duration(cfg.Guide.Refresh), time.Duration(cfg.Lineup.Refresh)
 	settings := config.NewManager(*cfgPath, cfg)
-	settings.SetLoader(func() (*config.Config, error) { return load(*cfgPath) })
+	settings.SetLoader(loadCfg)
+	if *httpAddr != "" {
+		settings.SetOverride("http_listen", "the -http option")
+	}
+	logConfigSource(*cfgPath, cfg, settings)
 	dev, err := vdev.New(vdev.Config{
 		DeviceID:               id,
 		FriendlyName:           cfg.FriendlyName,
@@ -150,6 +187,7 @@ func run() int {
 		AutoJoinOtherLocations: *cfg.AutoJoinOtherLocations,
 		EvictScans:             *cfg.EvictScans,
 		HideATSC3:              !*cfg.Lineup.ATSC3,
+		Setup:                  setup,
 		StreamTTL:              *cfg.StreamTTL,
 		LineupRefresh:          refresh,
 		GuideRefresh:           guideRefresh,
@@ -158,6 +196,7 @@ func run() int {
 		GuideUnlocked:          cfg.Guide.Unlocked,
 		GuideStartDelay:        time.Duration(cfg.Guide.StartDelay),
 		HTTPAddr:               cfg.HTTPListen,
+		HTTPFallback:           httpFallback(cfg),
 		ControlAddr:            cfg.ControlListen,
 		StreamAddr:             cfg.StreamListen,
 		AdvertiseHost:          cfg.AdvertiseHost,
@@ -242,4 +281,43 @@ func pickConfig(flagValue string, exists func(string) bool) string {
 		return defaultConfig
 	}
 	return flagValue
+}
+
+// applyOverrides puts the command-line options over what the files and the
+// settings page say.
+func applyOverrides(c *config.Config, httpAddr string) {
+	if httpAddr != "" {
+		c.HTTPListen, c.HTTPListenDefault = httpAddr, false
+	}
+}
+
+// httpFallback is the port the web interface moves to if its default (80) cannot be
+// used. Nothing is tried when the port was chosen on purpose.
+func httpFallback(c *config.Config) string {
+	if !c.HTTPListenDefault {
+		return ""
+	}
+	if c.Bind != "" {
+		return net.JoinHostPort(c.Bind, "8080")
+	}
+	return ":8080"
+}
+
+// logConfigSource says where the running configuration came from.
+func logConfigSource(path string, cfg *config.Config, m *config.Manager) {
+	src := "no config file, built-in defaults"
+	if path != "" {
+		src = path
+	}
+	var by []string
+	for k, v := range m.OverriddenByEnv() {
+		by = append(by, k+" by "+v)
+	}
+	sort.Strings(by)
+	extra := ""
+	if len(by) > 0 {
+		extra = "; overridden: " + strings.Join(by, ", ")
+	}
+	log.Printf("config: %s; %d setting(s) saved from the web page (%s); state in %s%s",
+		src, len(m.Saved()), m.FilePath(), cfg.StateDir, extra)
 }

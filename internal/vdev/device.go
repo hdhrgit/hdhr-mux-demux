@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"hdhrmux/internal/chanmap"
@@ -60,6 +61,13 @@ type Config struct {
 	ScanTo     int
 
 	HTTPAddr string // web/API port, e.g. ":80"
+	// HTTPFallback, if set, is tried when HTTPAddr cannot be used because the port is
+	// not allowed for this user (80 without privileges) or already taken.
+	HTTPFallback string
+	// Setup, when not empty, says why the multiplexer has nothing to serve yet (no
+	// devices were found). It is shown on the web pages, and the device keeps quiet on
+	// the network: it does not answer discovery or announce itself.
+	Setup string
 	// StreamAddr is the streaming port real devices use (default ":5004");
 	// "-" disables it. It serves the same handler as HTTPAddr.
 	StreamAddr  string
@@ -204,6 +212,9 @@ type Device struct {
 
 func New(cfg Config, h *hub.Hub, lu *lineup.Lineup) (*Device, error) {
 	cfg.defaults()
+	if cfg.Setup != "" {
+		cfg.Hidden = true // nothing to offer yet: stay quiet on the network
+	}
 	if cfg.Tuners <= 0 {
 		return nil, errors.New("vdev: need at least one virtual tuner")
 	}
@@ -228,6 +239,14 @@ func New(cfg Config, h *hub.Hub, lu *lineup.Lineup) (*Device, error) {
 func (d *Device) Start() error {
 	var err error
 	d.httpLn, err = net.Listen("tcp", d.cfg.HTTPAddr)
+	if err != nil && d.cfg.HTTPFallback != "" && (errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EADDRINUSE)) {
+		why := "is not allowed for this user (run as root, or give the program CAP_NET_BIND_SERVICE)"
+		if errors.Is(err, syscall.EADDRINUSE) {
+			why = "is in use by another program"
+		}
+		log.Printf("web port %s %s: using %s instead. Clients that add this multiplexer by address need that port; discovery announces it. Set http_listen (or -http) to choose.", d.cfg.HTTPAddr, why, d.cfg.HTTPFallback)
+		d.httpLn, err = net.Listen("tcp", d.cfg.HTTPFallback)
+	}
 	if err != nil {
 		return fmt.Errorf("http listen: %w", err)
 	}

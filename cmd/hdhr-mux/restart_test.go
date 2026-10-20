@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -120,3 +121,101 @@ type syncBuf struct {
 
 func (s *syncBuf) Write(p []byte) (int, error) { s.mu.Lock(); defer s.mu.Unlock(); return s.b.Write(p) }
 func (s *syncBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
+
+// Run by hand: no service, no config file, the web port from -http, state in the
+// working directory. The log says where the configuration came from and the
+// settings page shows the port as set by the command line.
+func TestRunByHandWithHTTPOption(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the program")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "hdhr-mux")
+	if out, err := exec.Command("go", "build", "-buildvcs=false", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Skipf("cannot build: %v\n%s", err, out)
+	}
+	fake, err := fakehdhr.Start(fakehdhr.Config{DeviceID: hdhrproto.MakeDeviceID(0x10200000), Tuners: 2, Channels: []fakehdhr.Channel{{Frequency: 177000000, TSID: 1, Programs: []fakehdhr.Program{{Number: 1, VChannel: "7.1", Name: "ALPHA"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fake.Close()
+	port := freePort(t)
+	cfg := filepath.Join(dir, "c.json")
+	os.WriteFile(cfg, []byte(fmt.Sprintf(`{"control_listen":"127.0.0.1:%d","stream_listen":"-","ssdp":false,"guide":{"refresh":"0"},"lineup":{"refresh":"0"}}`, freePort(t))), 0o644)
+
+	cmd := exec.Command(bin, "-config", cfg, "-http", fmt.Sprintf("127.0.0.1:%d", port))
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "HDHOMERUN_DISABLE_DISCOVERY=true", "HDHOMERUN_DEVICES="+fake.Addr())
+	var out syncBuf
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { cmd.Process.Kill(); cmd.Wait() }()
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if r, err := http.Get(base + "/discover.json"); err == nil {
+			r.Body.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("not serving on the -http port:\n%s", out.String())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if s := out.String(); !strings.Contains(s, "config: "+cfg) || !strings.Contains(s, "http_listen by the -http option") {
+		t.Errorf("the log does not say where the configuration came from:\n%s", s)
+	}
+	req, _ := http.NewRequest("GET", base+"/ui/api/settings", nil)
+	r, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st struct{ Env map[string]string }
+	json.NewDecoder(r.Body).Decode(&st)
+	r.Body.Close()
+	if st.Env["http_listen"] != "the -http option" {
+		t.Errorf("settings page does not show the -http override: %v", st.Env)
+	}
+}
+
+// With no device to be found the program still runs, so that the web page can be
+// used to say where they are.
+func TestStaysUpWithoutDevices(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the program")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "hdhr-mux")
+	if out, err := exec.Command("go", "build", "-buildvcs=false", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Skipf("cannot build: %v\n%s", err, out)
+	}
+	port := freePort(t)
+	cfg := filepath.Join(dir, "c.json")
+	os.WriteFile(cfg, []byte(fmt.Sprintf(`{"control_listen":"127.0.0.1:%d","stream_listen":"-","ssdp":false,"upstream":{"discover":false,"devices":["127.0.0.1:1"]}}`, freePort(t))), 0o644)
+	cmd := exec.Command(bin, "-config", cfg, "-http", fmt.Sprintf("127.0.0.1:%d", port))
+	cmd.Dir = dir
+	var out syncBuf
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { cmd.Process.Kill(); cmd.Wait() }()
+	deadline := time.Now().Add(25 * time.Second)
+	for {
+		r, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/ui/api/activity", port))
+		if err == nil {
+			var a struct{ Setup string }
+			json.NewDecoder(r.Body).Decode(&a)
+			r.Body.Close()
+			if strings.Contains(a.Setup, "No HDHomeRun devices were found") {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no setup message on the activity page:\n%s", out.String())
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}

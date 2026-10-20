@@ -3208,3 +3208,39 @@ func TestActivityReportsTheSystem(t *testing.T) {
 		t.Errorf("system section %+v", a.System)
 	}
 }
+
+// When the web port is the default and cannot be used (privileged, or taken by
+// another program) the multiplexer moves to the fallback and says so, instead of
+// failing to start; a port chosen on purpose is never changed.
+func TestWebPortFallsBack(t *testing.T) {
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer busy.Close()
+	e := setup(t, []int{1}, 1, func(c *vdev.Config) {
+		c.HTTPAddr, c.HTTPFallback = busy.Addr().String(), "127.0.0.1:0"
+	})
+	if e.dev.HTTPPort() == busy.Addr().(*net.TCPAddr).Port {
+		t.Fatal("did not move off the busy port")
+	}
+	if r, err := http.Get(e.api + "/discover.json"); err != nil || r.StatusCode != 200 {
+		t.Errorf("not serving on the fallback: %v %v", err, r)
+	}
+}
+
+// With no devices the multiplexer still starts, keeps quiet on the network and says
+// why on its web pages, so the settings page can be used to fix it.
+func TestNoDevicesStartsInSetupMode(t *testing.T) {
+	msg := "No HDHomeRun devices were found."
+	e := setup(t, []int{}, 1, func(c *vdev.Config) { c.Setup = msg })
+	var a struct{ Setup string }
+	getJSON(t, e.api+"/ui/api/activity", &a)
+	if a.Setup != msg {
+		t.Errorf("activity setup %q", a.Setup)
+	}
+	infos, _ := hdhrproto.Discover([]string{e.ctl}, 600*time.Millisecond)
+	if len(infos) != 0 {
+		t.Errorf("a multiplexer with nothing to serve answered discovery: %v", infos)
+	}
+}

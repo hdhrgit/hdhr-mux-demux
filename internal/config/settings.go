@@ -87,6 +87,14 @@ var schema = []Field{
 	{Key: "guide.start_delay", Group: "Guide", Label: "Wait after start-up", Type: "duration", ZeroOff: true, Placeholder: "90s", Help: "Delay before the first guide pass. 0 starts it at once."},
 	{Key: "guide.unlocked", Group: "Guide", Label: "Leave tuners unlocked", Type: "bool", Help: "Let other applications (tvheadend, another DVR) take a tuner a guide pass is using. On by default; the pass notices and carries on elsewhere."},
 
+	{Key: "manufacturer", Group: "Advanced", Label: "Manufacturer", Type: "text", Placeholder: "default", Help: "The manufacturer string the multiplexer gives as a device. Cosmetic."},
+	{Key: "model_number", Group: "Advanced", Label: "Model number", Type: "text", Placeholder: "default", Help: "The model the multiplexer presents as. Cosmetic."},
+	{Key: "upstream.discover_targets", Group: "Advanced", Label: "Send discovery to", Type: "list", Help: "Extra addresses to send the device discovery broadcast to, one per line, for example a directed broadcast to another subnet. Devices you list under Devices need no discovery."},
+	{Key: "upstream.local_ip", Group: "Advanced", Label: "Address devices stream to", Type: "text", Placeholder: "automatic", Help: "Only for the rtp and udp transports, where the devices push the stream to this machine: the address they should use."},
+	{Key: "upstream.wait_free", Group: "Advanced", Label: "Wait for a busy tuner", Type: "duration", Placeholder: "3s", Help: "How long a request waits for a physical tuner that is still being released before it gives up."},
+	{Key: "lineup.default_source", Group: "Advanced", Label: "Default scan source", Type: "text", Placeholder: "Antenna", Help: "The source name a scan uses when the client does not say (for example Antenna or Cable)."},
+	{Key: "lineup.scan_from", Group: "Advanced", Label: "Scan from channel", Type: "int", Placeholder: "0 (whole map)", Help: "The first RF channel number the multiplexer's own scan tries."},
+	{Key: "lineup.scan_to", Group: "Advanced", Label: "Scan to channel", Type: "int", Placeholder: "0 (whole map)", Help: "The last RF channel number the multiplexer's own scan tries."},
 	{Key: "log_requests", Group: "Diagnostics", Label: "Log every request", Type: "bool", Help: "Write every client request to the log. Noisy; for finding out what a client does."},
 	{Key: "pprof_listen", Group: "Diagnostics", Label: "Profiling address", Type: "text", Placeholder: "off", Help: "For example 127.0.0.1:6060. Go profiling endpoint; leave empty unless you are debugging."},
 }
@@ -165,9 +173,10 @@ type Manager struct {
 	path string  // the config file ("" if none)
 	cfg  *Config // as started: what the settings that need a restart are running with
 
-	mu     sync.Mutex
-	fresh  *Config // the latest configuration read from disk
-	loader func() (*Config, error)
+	mu        sync.Mutex
+	fresh     *Config           // the latest configuration read from disk
+	overrides map[string]string // settings fixed by a command-line option
+	loader    func() (*Config, error)
 }
 
 // NewManager returns a manager for cfg, which was loaded from path.
@@ -249,14 +258,31 @@ func (m *Manager) Saved() []string {
 	return keys
 }
 
-// OverriddenByEnv lists the settings an environment variable is overriding.
+// SetOverride says that something outside the settings (a command-line option)
+// fixes a setting; the page shows it as set by what (for example "the -http option").
+func (m *Manager) SetOverride(key, by string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.overrides == nil {
+		m.overrides = map[string]string{}
+	}
+	m.overrides[key] = by
+}
+
+// OverriddenByEnv lists the settings something else is overriding, and what: an
+// environment variable or a command-line option.
 func (m *Manager) OverriddenByEnv() map[string]string {
 	out := map[string]string{}
 	for _, f := range schema {
 		if f.Env != "" && os.Getenv(f.Env) != "" {
-			out[f.Key] = f.Env
+			out[f.Key] = "the environment variable " + f.Env
 		}
 	}
+	m.mu.Lock()
+	for k, v := range m.overrides {
+		out[k] = v
+	}
+	m.mu.Unlock()
 	return out
 }
 
@@ -371,6 +397,10 @@ func normalize(f Field, v any) (any, error) {
 					return nil, errors.New("must be auto or 8 hex digits with a valid check digit")
 				}
 			}
+		case "upstream.local_ip":
+			if s != "" && net.ParseIP(s) == nil {
+				return nil, errors.New("must be an IP address")
+			}
 		case "bind":
 			if s != "" && net.ParseIP(s) == nil {
 				return nil, errors.New("must be an IP address such as 127.0.0.1")
@@ -469,6 +499,8 @@ var restartKeys = map[string]bool{
 	"ssdp": true, "ssdp_ipv4": true, "ssdp_ipv6": true, "ssdp_atsc3": true,
 	"upstream.discover": true, "upstream.devices": true, "upstream.allow": true, "upstream.tuners": true,
 	"upstream.exclude": true, "upstream.mask": true, "upstream.mode": true, "upstream.stream_port": true,
+	"manufacturer": true, "model_number": true, "upstream.discover_targets": true, "upstream.local_ip": true,
+	"upstream.wait_free": true, "lineup.default_source": true, "lineup.scan_from": true, "lineup.scan_to": true,
 	"lineup.channel_map": true, "lineup.scan_on_start": true, "guide.start_delay": true, "pprof_listen": true,
 }
 

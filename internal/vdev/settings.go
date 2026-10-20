@@ -74,6 +74,7 @@ func (d *Device) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 		"locked":         d.cfg.SettingsLocked,
 		"restartable":    d.cfg.Restart != nil,
 		"pendingRestart": m.PendingRestart(),
+		"setup":          d.cfg.Setup,
 	})
 }
 

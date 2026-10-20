@@ -74,6 +74,9 @@ type Config struct {
 	PprofListen    string `json:"pprof_listen"` // e.g. "127.0.0.1:6060": Go profiling endpoint (off by default)
 
 	StateDir string `json:"state_dir"` // lineup.json and device id live here
+	// HTTPListenDefault says http_listen was not set anywhere, so it may fall back to
+	// another port if port 80 cannot be used.
+	HTTPListenDefault bool `json:"-"`
 	// Path is the config file this was loaded from (not part of the file).
 	Path string `json:"-"`
 
@@ -240,6 +243,7 @@ func loadConfig(path string, overlay []byte, env bool) (*Config, error) {
 		}
 	}
 	c.Path = path
+	c.HTTPListenDefault = !has(base, "http_listen")
 	if c.StateDir == "" {
 		c.StateDir = "."
 	}
