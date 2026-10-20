@@ -313,6 +313,14 @@ the Settings page shows it as set by the command line, and `http_listen` there i
 permanent. Port 80 is not needed to stream (streams are on 5004); it is only the address clients use
 when they add the multiplexer by IP, and discovery announces whichever port is in use.
 
+**Not discoverable until chosen.** A new multiplexer does not answer discovery broadcasts or announce
+itself over SSDP: it would otherwise show up in every DVR on the network the moment it starts, which is
+rarely wanted when it is first being tried (and two multiplexers on one network confuse a DVR). The web
+page, and any client that is given its address or device ID, still work. Turn on **Discoverable**
+(Settings, General), set `"discoverable": true`, set `HDHOMERUN_DISCOVERABLE=true`, or start it
+with `-discoverable` (for that run only). Until one of those is done the log and the Activity and
+Settings pages say so.
+
 **No devices found.** The program keeps running instead of exiting: it stays quiet on the network, the
 web pages say "Nothing to serve yet" and point at the Settings page (add the devices' addresses under
 Devices and press Restart), and it restarts itself when it finds a device.
@@ -466,7 +474,7 @@ meaning is the same:
 | `HDHOMERUN_DEVICES` | comma-separated IPs/hostnames of devices, added to `upstream.devices` |
 | `HDHOMERUN_DISABLE_DISCOVERY=true` | no auto-discovery; only the listed devices |
 | `HDHOMERUN_TUNERS` | comma-separated tuners to use (`DEVICEID`, `DEVICEID/N`, `DEVICEID/N-M`); replaces `upstream.tuners` |
-| `HDHOMERUN_DISCOVERABLE=false` | do not let clients discover the multiplexer |
+| `HDHOMERUN_DISCOVERABLE=true` | answer discovery and announce over SSDP (off until chosen; `false` makes the choice explicit) |
 
 Changing the tuner list renumbers the virtual tuners.
 

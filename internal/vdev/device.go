@@ -93,6 +93,9 @@ type Config struct {
 	EvictScans bool
 	// HideATSC3 leaves ATSC 3.0 channels out of the listings.
 	HideATSC3 bool
+	// Notice, when not empty, is shown on the activity and settings pages (for example
+	// that the multiplexer is not discoverable and why).
+	Notice string
 	// ScanGrace is how long a control client has to hold a filter that completes no
 	// programme before it counts as scanning (default 10 s): a client about to
 	// watch sets such a filter too, for a moment, while it reads the PMTs.

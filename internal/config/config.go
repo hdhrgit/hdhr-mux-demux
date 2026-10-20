@@ -64,10 +64,14 @@ type Config struct {
 	// SSDPATSC3 (default false) also announces the ATSC 3.0 primary device,
 	// as real HDHomeRun 4K devices do.
 	SSDPATSC3 *bool `json:"ssdp_atsc3"`
-	// Discoverable (default true) lets clients find the multiplexer: it answers
-	// wildcard UDP discovery and announces itself over SSDP. When false it is
-	// only found by those who know its address or device ID.
+	// Discoverable lets clients find the multiplexer: it answers wildcard UDP
+	// discovery and announces itself over SSDP. It is off until somebody turns it on
+	// (settings page, config file, HDHOMERUN_DISCOVERABLE or -discoverable): a new
+	// installation does not announce itself on the network by surprise. When off it
+	// is only found by those who know its address or device ID.
 	Discoverable *bool `json:"discoverable"`
+	// DiscoverableDefault says nobody chose: it is off because that is the default.
+	DiscoverableDefault bool `json:"-"`
 	// SettingsLocked refuses every change from the web interface's settings page.
 	SettingsLocked bool   `json:"settings_locked"`
 	LogRequests    bool   `json:"log_requests"` // log every client request (diagnostics)
@@ -190,9 +194,11 @@ func applyEnv(c *Config) {
 	if v := strings.ToLower(os.Getenv("HDHOMERUN_DISCOVERABLE")); v == "false" || v == "0" {
 		f := false
 		c.Discoverable = &f
+		c.DiscoverableDefault = false
 	} else if v == "true" || v == "1" {
 		t := true
 		c.Discoverable = &t
+		c.DiscoverableDefault = false
 	}
 }
 
@@ -278,8 +284,8 @@ func loadConfig(path string, overlay []byte, env bool) (*Config, error) {
 		c.SSDP = &t
 	}
 	if c.Discoverable == nil {
-		t := true
-		c.Discoverable = &t
+		f := false
+		c.Discoverable, c.DiscoverableDefault = &f, true
 	}
 	if c.AutoJoinDirect == nil {
 		t := true

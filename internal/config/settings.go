@@ -44,7 +44,7 @@ var schema = []Field{
 	{Key: "friendly_name", Group: "General", Label: "Name", Type: "text", Help: "How the multiplexer shows up in clients and on the web page."},
 	{Key: "device_id", Group: "General", Label: "Device ID", Type: "text", Placeholder: "auto", Help: "Eight hex digits with a valid check digit, or auto for a stable generated one. Changing it makes clients see a different device."},
 	{Key: "virtual_tuners", Group: "General", Label: "Virtual tuners", Type: "int", Placeholder: "0", Help: "0 gives one per physical tuner, which is what you want."},
-	{Key: "discoverable", Group: "General", Label: "Discoverable", Type: "bool", Env: "HDHOMERUN_DISCOVERABLE", Help: "Answer wildcard discovery and announce over SSDP, so clients find the multiplexer by themselves. When off, add it to a client by address."},
+	{Key: "discoverable", Group: "General", Label: "Discoverable", Type: "bool", Env: "HDHOMERUN_DISCOVERABLE", Help: "Answer wildcard discovery and announce over SSDP, so clients find the multiplexer by themselves. Off by default, so a new installation does not announce itself by surprise; when off, add it to a client by address."},
 
 	{Key: "bind", Group: "Network", Label: "Bind address", Type: "text", Placeholder: "all interfaces", Help: "Listen on this address only (for example 127.0.0.1 when a DVR runs on this machine). Applies to the addresses below that have no host. Loopback also turns SSDP off."},
 	{Key: "http_listen", Group: "Network", Label: "Web / API address", Type: "text", Placeholder: ":80", Help: "host:port the web interface and the HDHomeRun HTTP API listen on. Use 127.0.0.1:80 to serve this machine only."},

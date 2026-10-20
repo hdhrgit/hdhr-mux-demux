@@ -27,8 +27,8 @@ func load(t *testing.T, json string) *Config {
 
 func TestDefaults(t *testing.T) {
 	c := load(t, "")
-	if !*c.Upstream.Discover || !*c.Discoverable || !*c.SSDP {
-		t.Fatal("discovery, discoverability and SSDP should default to on")
+	if !*c.Upstream.Discover || *c.Discoverable || !*c.SSDP {
+		t.Fatal("device discovery and SSDP default to on, the multiplexer itself to not discoverable")
 	}
 }
 
@@ -283,5 +283,27 @@ func TestAdvancedSettingsSave(t *testing.T) {
 	m.SetOverride("http_listen", "the -http option")
 	if got := m.OverriddenByEnv()["http_listen"]; got != "the -http option" {
 		t.Errorf("override %q", got)
+	}
+}
+
+// A new installation does not announce itself by surprise: it is not discoverable
+// until somebody chooses (file, settings page, environment variable or option).
+func TestNotDiscoverableUntilChosen(t *testing.T) {
+	c := load(t, "")
+	if *c.Discoverable || !c.DiscoverableDefault {
+		t.Fatalf("by default: discoverable=%v default=%v, want off and the default", *c.Discoverable, c.DiscoverableDefault)
+	}
+	c = load(t, `{"discoverable": true}`)
+	if !*c.Discoverable || c.DiscoverableDefault {
+		t.Errorf("chosen on in the file: %v default=%v", *c.Discoverable, c.DiscoverableDefault)
+	}
+	c = load(t, `{"discoverable": false}`)
+	if *c.Discoverable || c.DiscoverableDefault {
+		t.Errorf("chosen off in the file: %v default=%v", *c.Discoverable, c.DiscoverableDefault)
+	}
+	t.Setenv("HDHOMERUN_DISCOVERABLE", "true")
+	c = load(t, "")
+	if !*c.Discoverable || c.DiscoverableDefault {
+		t.Errorf("environment variable: %v default=%v", *c.Discoverable, c.DiscoverableDefault)
 	}
 }

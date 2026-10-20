@@ -160,7 +160,7 @@ function statCard(label, value, unit, sub, extra = '', cls = '') {
 
 function updateActivity(a) {
   const nowSec = a.time / 1000, S = a.summary;
-  patch($('#setup-wrap'), a.setup ? `<div class="banner warn" role="status" style="margin-top:14px"><b>Nothing to serve yet</b><p>${esc(a.setup)} <a href="#/settings">Open Settings</a></p></div>` : '');
+  patch($('#setup-wrap'), (a.setup ? `<div class="banner warn" role="status" style="margin-top:14px"><b>Nothing to serve yet</b><p>${esc(a.setup)} <a href="#/settings">Open Settings</a></p></div>` : '') + (a.notice ? `<div class="banner" role="status" style="margin-top:14px"><b>Not discoverable</b><p>${esc(a.notice)} <a href="#/settings">Open Settings</a></p></div>` : ''));
   $('#device-sub').textContent = `${a.device.model} · ${a.device.id}${a.device.version ? ' · v' + a.device.version.replace(/^v/, '') : ''} · up ${dur(a.device.uptime)}`;
   $('#foot-note').textContent = `Updated ${new Date(a.time).toLocaleTimeString()}`;
   for (const t of a.tuners) {
@@ -328,7 +328,8 @@ function drawSettings(message) {
   const waiting = (st.pendingRestart || []).map((k) => (fields[k] || {}).label || k);
   const pendingBanner = waiting.length ? `<div class="banner warn" role="status"><b>Waiting for a restart</b><p>${esc(waiting.join(', '))} ${waiting.length === 1 ? 'was' : 'were'} saved and will take effect when the multiplexer restarts.${st.restartable ? '' : ' Restart the container or service to apply.'}</p></div>` : '';
   const setupBanner = st.setup ? `<div class="banner warn" role="status"><b>Nothing to serve yet</b><p>${esc(st.setup)}</p></div>` : '';
-  body.innerHTML = setupBanner + banner + lock + pendingBanner + GROUPS.map((g) => {
+  const noticeBanner = st.notice ? `<div class="banner" role="status"><b>Not discoverable</b><p>${esc(st.notice)}</p></div>` : '';
+  body.innerHTML = setupBanner + noticeBanner + banner + lock + pendingBanner + GROUPS.map((g) => {
     const fs = st.schema.filter((f) => f.group === g);
     return fs.length ? `<section class="card settings-group"><h2>${g}</h2>${fs.map((f) => fieldHTML(f, st)).join('')}</section>` : '';
   }).join('') + `<div class="card info-card"><h2>Where things are</h2><dl>
