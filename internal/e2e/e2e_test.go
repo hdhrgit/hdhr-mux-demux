@@ -3244,3 +3244,26 @@ func TestNoDevicesStartsInSetupMode(t *testing.T) {
 		t.Errorf("a multiplexer with nothing to serve answered discovery: %v", infos)
 	}
 }
+
+// A new installation knows no channel's frequency; the first guide pass finds out by
+// tuning channels by name (one probe teaches the whole multiplex) instead of
+// finding nothing to listen to.
+func TestGuidePassLearnsWhereChannelsAre(t *testing.T) {
+	e := setup(t, []int{2}, 2, func(c *vdev.Config) { c.GuideHold = 2 * time.Second })
+	e.lu.Replace([]lineup.Entry{
+		{GuideNumber: "7.1", GuideName: "ALPHA"}, {GuideNumber: "7.2", GuideName: "BETA"},
+		{GuideNumber: "14.1", GuideName: "GAMMA"}, {GuideNumber: "14.3", GuideName: "DELTA"},
+	})
+	done, total, err := e.dev.GuidePass(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for g, want := range map[string]uint64{"7.1": 177000000, "7.2": 177000000, "14.1": 473000000, "14.3": 473000000} {
+		if en, _ := e.lu.Find(g); en.Frequency != want {
+			t.Errorf("%s at %d Hz after the pass, want %d", g, en.Frequency, want)
+		}
+	}
+	if total != 2 || done != 2 {
+		t.Errorf("the pass listened to %d of %d multiplexes, want 2 of 2", done, total)
+	}
+}

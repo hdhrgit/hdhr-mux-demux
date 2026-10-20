@@ -61,6 +61,8 @@ func (d *Device) GuidePass(ctx context.Context) (done, total int, err error) {
 		d.guide.mu.Unlock()
 	}()
 
+	d.learnUnplaced(ctx)
+
 	seen := map[uint64]bool{}
 	var freqs []uint64
 	for _, e := range d.lineup.Entries(false) {
@@ -287,4 +289,35 @@ func (d *Device) handleEPGRefresh(w http.ResponseWriter, r *http.Request) {
 		d.GuidePass(ctx)
 	}()
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// learnUnplaced finds out where channels are on the air when the lineup does not say.
+// The lineup comes from the devices' own lists, which give no frequencies; where
+// each channel is comes from tuning it. On a new installation no channel has been
+// tuned yet, so a guide pass would have nothing to listen to. Looking for one
+// channel by name teaches every channel on its multiplex, so this takes about one
+// probe per multiplex, once.
+func (d *Device) learnUnplaced(ctx context.Context) {
+	tried := map[string]bool{}
+	first := true
+	for ctx.Err() == nil {
+		next := ""
+		for _, e := range d.lineup.Entries(false) {
+			if e.Frequency == 0 && !tried[e.GuideNumber] {
+				next = e.GuideNumber
+				break
+			}
+		}
+		if next == "" {
+			return
+		}
+		if first {
+			log.Printf("guide: finding where the channels are on the air (a new installation); this takes a few minutes, once")
+			first = false
+		}
+		tried[next] = true
+		if err := d.hub.LearnVChannel(ctx, next); err != nil && ctx.Err() == nil {
+			log.Printf("guide: could not find where %s is on the air: %v", next, err)
+		}
+	}
 }
