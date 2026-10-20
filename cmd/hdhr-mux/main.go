@@ -61,7 +61,14 @@ func run() int {
 	ignoreSettings := flag.Bool("ignore-settings", false, "ignore settings.json (saved from the web interface) in the state directory: the way out if a saved setting stops start-up")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	httpAddr := flag.String("http", "", "web interface address, for example :8080 or 127.0.0.1:8080 (overrides the http_listen setting; without either it is :80, or :8080 when :80 is not allowed or in use)")
+	discoverableFlag := flag.Bool("discoverable", false, "answer discovery and announce over SSDP for this run (overrides the setting; a multiplexer is not discoverable until somebody turns it on)")
 	flag.Parse()
+	var discoverable *bool // set only when the option was given
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "discoverable" {
+			discoverable = discoverableFlag
+		}
+	})
 	*cfgPath = pickConfig(*cfgPath, func(p string) bool { _, err := os.Stat(p); return err == nil })
 	if *showVersion {
 		fmt.Println("hdhr-mux", version)
@@ -79,7 +86,7 @@ func run() int {
 	loadCfg := func() (*config.Config, error) {
 		c, err := load(*cfgPath)
 		if err == nil {
-			applyOverrides(c, *httpAddr)
+			applyOverrides(c, *httpAddr, discoverable)
 		}
 		return c, err
 	}
@@ -164,10 +171,14 @@ func run() int {
 	h.SetSignalSettle(time.Duration(cfg.SignalSettle))
 
 	guideRefresh, refresh := time.Duration(cfg.Guide.Refresh), time.Duration(cfg.Lineup.Refresh)
+	notice := discoverabilityNotice(cfg)
 	settings := config.NewManager(*cfgPath, cfg)
 	settings.SetLoader(loadCfg)
 	if *httpAddr != "" {
 		settings.SetOverride("http_listen", "the -http option")
+	}
+	if discoverable != nil {
+		settings.SetOverride("discoverable", "the -discoverable option")
 	}
 	logConfigSource(*cfgPath, cfg, settings)
 	dev, err := vdev.New(vdev.Config{
@@ -188,6 +199,7 @@ func run() int {
 		EvictScans:             *cfg.EvictScans,
 		HideATSC3:              !*cfg.Lineup.ATSC3,
 		Setup:                  setup,
+		Notice:                 notice,
 		StreamTTL:              *cfg.StreamTTL,
 		LineupRefresh:          refresh,
 		GuideRefresh:           guideRefresh,
@@ -285,9 +297,13 @@ func pickConfig(flagValue string, exists func(string) bool) string {
 
 // applyOverrides puts the command-line options over what the files and the
 // settings page say.
-func applyOverrides(c *config.Config, httpAddr string) {
+func applyOverrides(c *config.Config, httpAddr string, discoverable *bool) {
 	if httpAddr != "" {
 		c.HTTPListen, c.HTTPListenDefault = httpAddr, false
+	}
+	if discoverable != nil {
+		v := *discoverable
+		c.Discoverable, c.DiscoverableDefault = &v, false
 	}
 }
 
@@ -320,4 +336,19 @@ func logConfigSource(path string, cfg *config.Config, m *config.Manager) {
 	}
 	log.Printf("config: %s; %d setting(s) saved from the web page (%s); state in %s%s",
 		src, len(m.Saved()), m.FilePath(), cfg.StateDir, extra)
+}
+
+// discoverabilityNotice logs, and returns for the web pages, why the multiplexer
+// keeps quiet on the network when that is only because nobody turned it on.
+func discoverabilityNotice(c *config.Config) string {
+	if *c.Discoverable {
+		return ""
+	}
+	if !c.DiscoverableDefault {
+		log.Printf("not discoverable: discoverable is off, so clients only find it by its address")
+		return ""
+	}
+	msg := "This multiplexer does not announce itself on the network and does not answer discovery until you turn on Discoverable (Settings, General) or start it with -discoverable. Clients that are given its address can still use it."
+	log.Print("not discoverable: " + msg)
+	return msg
 }
