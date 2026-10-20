@@ -1868,11 +1868,13 @@ func TestUnlockedGuidePassYieldsToOutsiders(t *testing.T) {
 	raw := hdhrproto.NewControl(e.fakes[0].Addr())
 	defer raw.Close()
 
+	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		e.dev.GuidePass(context.Background())
+		e.dev.GuidePass(ctx)
 	}()
+	defer func() { cancel(); <-done }()
 	waitFor(t, "pass listening without a lock", 5*time.Second, func() bool {
 		tg, _ := raw.Get("/tuner0/target")
 		lk, _ := raw.Get("/tuner0/lockkey")
@@ -1889,11 +1891,15 @@ func TestUnlockedGuidePassYieldsToOutsiders(t *testing.T) {
 		t.Fatalf("an outsider could not take an unlocked tuner: %v %v", resp, err)
 	}
 	defer resp.Body.Close()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the pass did not give up the tuner")
-	}
+	// (the pass goes on to listen to other RF channels, so it is the stream that is watched)
+	waitFor(t, "the pass to give up the tuner", 5*time.Second, func() bool {
+		for _, s := range e.hub.Streams() {
+			if s.Background && s.Spec.Frequency == 473000000 {
+				return false
+			}
+		}
+		return true
+	})
 	if time.Since(began) > 4*time.Second {
 		t.Fatalf("the pass took %v to notice", time.Since(began))
 	}
@@ -3503,4 +3509,38 @@ func TestChannelChoicesDecideWhereAutoTunesAndWhichGuide(t *testing.T) {
 	if r, err := http.DefaultClient.Do(req); err != nil || r.StatusCode != 403 {
 		t.Errorf("a PUT without the admin header: %v %v", err, r)
 	}
+}
+
+// The devices' lineups place every station once. A station carried on another RF
+// channel is found because a guide pass also listens to the RF channels the lineup
+// does not mention.
+func TestGuidePassFindsStationsOnOtherRFChannels(t *testing.T) {
+	testChannels = append(append([]fakehdhr.Channel{}, channels...),
+		fakehdhr.Channel{Frequency: 183000000, TSID: 9, Programs: []fakehdhr.Program{{Number: 5, VChannel: "7.1", Name: "ALPHA-3"}}})
+	defer func() { testChannels = nil }()
+	e := setup(t, []int{3}, 3, func(c *vdev.Config) { c.GuideHold = 2 * time.Second })
+	e.lu.Replace([]lineup.Entry{{GuideNumber: "7.1", GuideName: "ALPHA", Frequency: 177000000, Program: 1}})
+	if _, _, err := e.dev.GuidePass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var v struct {
+		Channels []struct {
+			Number    string
+			Locations []struct {
+				Frequency uint64
+				Name      string
+			}
+		}
+	}
+	getJSON(t, e.api+"/ui/api/channels", &v)
+	for _, c := range v.Channels {
+		if c.Number != "7.1" {
+			continue
+		}
+		if len(c.Locations) != 2 || c.Locations[0].Frequency != 177000000 || c.Locations[1].Frequency != 183000000 || c.Locations[1].Name != "ALPHA-3" {
+			t.Fatalf("7.1 places: %+v", c.Locations)
+		}
+		return
+	}
+	t.Fatal("7.1 is not on the Channels page")
 }

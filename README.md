@@ -184,7 +184,7 @@ titles and times, descriptions). The multiplexer reads it from the streams it al
 * **From a pass over the idle multiplexes.** After start-up (90 s) and then every
   `guide.refresh` (default 1 h, 0 turns it off) it listens to each ATSC 1.0 multiplex in the lineup for
   `guide.hold` (45 s), `guide.parallel` (3) at a time, on spare tuners. A pass never keeps a
-  tuner from a viewer: it gives it up at once. `POST /epg/refresh` starts one now.
+  tuner from a viewer: it gives it up at once. It also listens for a few seconds to the other broadcast RF channels (see the Channels tab). `POST /epg/refresh` starts one now.
   On a new installation no channel's place on the air is known yet (the lineup comes from the devices
   and has no frequencies), so the first pass begins by finding out: it looks for one channel of each
   multiplex by name, which teaches every channel on that multiplex, about one tuning per multiplex and
@@ -431,8 +431,11 @@ are embedded in the binary.
   symbol quality, with the device that measured it) and how many hours ahead the guide on that RF
   channel goes (or "none": 533 MHz sends no guide at all). The place the devices' lineups use is marked.
   "All channels" shows every channel. It is learned from the streams and guide passes that tune the
-  channels anyway and kept in `<state_dir>/rfmap.json`, so it fills in over the first guide pass
-  after a new start; nothing is tuned just for it.
+  channels anyway and kept in `<state_dir>/rfmap.json`. The devices' lineups give every station one
+  place, so each guide pass also listens for a few seconds to the broadcast RF channels 2-36 that no
+  lineup channel is placed on (`us-bcast` only), which is how a station on a second RF channel is found;
+  the ones that carry something are then collected like the rest. It fills in over the first guide pass
+  after a new start, and a new transmitter shows up within `guide.refresh`.
   The page is also where the choices are made (saved in `<state_dir>/channels.json`; they apply at once,
   and need the same permission as the settings page):
   * **Video** (a checkbox per RF channel): where `/auto/` may tune the channel. Several can be on. A
