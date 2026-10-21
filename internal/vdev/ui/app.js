@@ -229,30 +229,40 @@ function renderActivity(root) {
 }
 
 /* ---------- lineup page ---------- */
-const lineup = { data: [], q: '', filter: 'all', loaded: false };
 const chans = { q: '', data: null }; // the channels page
+const lineup = { data: [], q: '', filter: 'all', loaded: false, editable: false };
+const STAR = 'M12 2.5l2.9 5.9 6.5.9-4.7 4.6 1.1 6.5L12 17.4 6.2 20.4l1.1-6.5L2.6 9.3l6.5-.9z';
+const CROSS = 'M5 5l14 14M19 5L5 19';
+const NEXT_STATE = { normal: 'favorite', favorite: 'disabled', disabled: 'normal' };
+function stateOf(c) { return c.disabled ? 'disabled' : c.favorite ? 'favorite' : 'normal'; }
+function starButton(c, ed) {
+  const s = stateOf(c), label = { normal: 'Enabled: click to make it a favourite', favorite: 'Favourite: click to disable it', disabled: 'Disabled: click to enable it' }[s];
+  const icon = s === 'disabled' ? `<path d="${CROSS}" stroke="var(--bad)" stroke-width="2.4" stroke-linecap="round" fill="none"/>` : `<path d="${STAR}" stroke="var(--muted)" stroke-width="1.6" stroke-linejoin="round" fill="${s === 'favorite' ? 'var(--accent)' : 'none'}"/>`;
+  return `<button type="button" class="star ${s}" data-star="${s}" ${ed ? '' : 'disabled'} title="${esc(ed ? label : 'Changing this is only possible from the local network')}" aria-label="${esc(label)}"><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">${icon}</svg></button>`;
+}
 function lineupRows() {
   const q = lineup.q.trim().toLowerCase(), nowSec = Date.now() / 1000;
   return lineup.data.filter((c) => {
     if (lineup.filter === 'hd' && !c.hd) return false;
     if (lineup.filter === 'live' && !c.watching) return false;
     if (lineup.filter === 'fav' && !c.favorite) return false;
+    if (lineup.filter === 'off' ? !c.disabled : (c.disabled && lineup.filter !== 'all')) return false;
     if (!q) return true;
     return `${c.number} ${c.name} ${c.now && !c.now.placeholder ? c.now.title : ''} ${c.next && !c.next.placeholder ? c.next.title : ''}`.toLowerCase().includes(q);
   }).map((c) => {
     const p = c.now, done = p ? pct((nowSec - p.start) / Math.max(1, p.end - p.start) * 100) : 0;
-    return `<tr data-url="${esc(c.url)}"><td class="c-num"><span class="chan">${esc(c.number)}</span></td>
+    return `<tr class="${c.disabled ? 'off' : ''}" data-url="${esc(c.url)}" data-num="${esc(c.number)}"><td class="c-fav">${starButton(c, lineup.editable)}</td><td class="c-num"><span class="chan">${esc(c.number)}</span></td>
       <td><b class="nm">${esc(c.name)}</b>${c.hd ? '<span class="tag">HD</span>' : ''}${c.modulation === 'atsc3' ? '<span class="tag">3.0</span>' : ''}${c.watching ? `<span class="tag live">${c.watching} watching</span>` : ''}</td>
       <td class="prog">${p ? `<div class="title">${p.placeholder ? '<i style="color:var(--muted);font-weight:450">To be announced</i>' : esc(p.title)}</div><div class="progress"><i style="width:${done}%"></i></div><small>${clock(p.start)} – ${clock(p.end)}</small>` : '<small>no guide data</small>'}</td>
       <td class="prog c-next">${c.next ? `<div class="title">${c.next.placeholder ? '<i style="color:var(--muted);font-weight:450">To be announced</i>' : esc(c.next.title)}</div><small>${clock(c.next.start)}</small>` : ''}</td>
       <td class="c-rf">${mhz(c.frequency)}${c.codec ? `<br><small>${esc(c.codec)}</small>` : ''}</td>
-      <td class="c-act"><button class="btn" data-copy>Copy URL</button></td></tr>`;
+      <td class="c-act">${c.disabled ? '' : '<button class="btn" data-copy>Copy URL</button>'}</td></tr>`;
   }).join('');
 }
 function updateLineup() {
   const rows = lineupRows();
-  $('#lineup-count').textContent = lineup.data.length;
-  patch($('#lineup-body'), rows || `<tr><td colspan="6"><div class="empty"><h3>No channels match</h3>Try a different search or filter.</div></td></tr>`);
+  $('#lineup-count').textContent = lineup.data.filter((c) => !c.disabled).length;
+  patch($('#lineup-body'), rows || `<tr><td colspan="7"><div class="empty"><h3>No channels match</h3>Try a different search or filter.</div></td></tr>`);
 }
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true; } catch (e) {
@@ -265,15 +275,26 @@ function renderLineup(root) {
   root.innerHTML = `<div class="page-title"><h1>Lineup</h1><p><span id="lineup-count">–</span> channels, with what is on now.</p></div>
     <div class="toolbar"><label class="search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
       <input id="q" type="search" placeholder="Search channels and programmes" aria-label="Search channels and programmes" autocomplete="off"></label>
-      <div class="filters" role="group" aria-label="Filter">${[['all', 'All'], ['hd', 'HD'], ['live', 'Being watched'], ['fav', 'Favourites']].map(([k, n]) => `<button type="button" data-f="${k}" aria-pressed="${lineup.filter === k}">${n}</button>`).join('')}</div>
+      <div class="filters" role="group" aria-label="Filter">${[['all', 'All'], ['hd', 'HD'], ['live', 'Being watched'], ['fav', 'Favourites'], ['off', 'Disabled']].map(([k, n]) => `<button type="button" data-f="${k}" aria-pressed="${lineup.filter === k}">${n}</button>`).join('')}</div>
       <a class="btn" href="/playlist.m3u8" title="For players that cannot use the HDHomeRun protocol; guide link included">M3U8 playlist</a></div>
-    <div class="card table-card"><table class="lineup"><thead><tr><th class="c-num">Ch</th><th>Channel</th><th>Now</th><th class="c-next">Next</th><th class="c-rf">RF</th><th class="c-act"></th></tr></thead><tbody id="lineup-body"><tr><td colspan="6"><div class="skeleton" style="margin:12px"></div></td></tr></tbody></table></div>`;
+    <div class="card table-card"><table class="lineup"><thead><tr><th class="c-fav"></th><th class="c-num">Ch</th><th>Channel</th><th>Now</th><th class="c-next">Next</th><th class="c-rf">RF</th><th class="c-act"></th></tr></thead><tbody id="lineup-body"><tr><td colspan="7"><div class="skeleton" style="margin:12px"></div></td></tr></tbody></table></div>`;
   const q = $('#q'); q.value = lineup.q;
   q.addEventListener('input', () => { lineup.q = q.value; updateLineup(); });
   $$('.filters button', root).forEach((b) => b.addEventListener('click', () => {
     lineup.filter = b.dataset.f; $$('.filters button', root).forEach((x) => x.setAttribute('aria-pressed', String(x === b))); updateLineup();
   }));
   $('#lineup-body').addEventListener('click', async (e) => {
+    const st = e.target.closest('[data-star]');
+    if (st) {
+      const tr = st.closest('tr'), c = lineup.data.find((x) => x.number === tr.dataset.num); if (!c) return;
+      const next = NEXT_STATE[stateOf(c)];
+      try {
+        const r = await fetch('/ui/api/lineup/' + encodeURIComponent(c.number), { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'hdhr-mux-ui' }, body: JSON.stringify({ state: next }) });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'saving failed (' + r.status + ')');
+        c.favorite = next === 'favorite'; c.disabled = next === 'disabled'; updateLineup();
+      } catch (err) { st.title = err.message; }
+      return;
+    }
     const b = e.target.closest('[data-copy]'); if (!b) return;
     const url = b.closest('tr').dataset.url, ok = await copyText(url);
     b.textContent = ok ? 'Copied' : 'Copy failed'; b.classList.toggle('ok', ok);
@@ -282,7 +303,7 @@ function renderLineup(root) {
   const load = async () => {
     clearTimeout(timer);
     if (stopped) return;
-    try { lineup.data = (await getJSON('/ui/api/lineup')).channels; setConn(true); lineup.loaded = true; updateLineup(); } catch (e) { setConn(false); }
+    try { const j = await getJSON('/ui/api/lineup'); lineup.data = j.channels; lineup.editable = !!j.editable; setConn(true); lineup.loaded = true; updateLineup(); } catch (e) { setConn(false); }
     if (!stopped) timer = setTimeout(load, 20000);
   };
   load();

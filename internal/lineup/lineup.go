@@ -136,16 +136,47 @@ func (l *Lineup) Find(guide string) (Entry, bool) {
 	return Entry{}, false
 }
 
-// SetFavorite marks or clears a favourite and persists.
+// SetFavorite marks or clears a favourite and persists. A favourite is enabled.
 func (l *Lineup) SetFavorite(guide string, fav bool) {
 	l.mu.Lock()
 	for i := range l.entries {
 		if l.entries[i].GuideNumber == guide {
 			l.entries[i].Favorite = fav
+			if fav {
+				l.entries[i].Disabled = false
+			}
 		}
 	}
 	l.mu.Unlock()
 	l.save()
+}
+
+// SetDisabled switches a channel off or on in this lineup only (the devices are not told)
+// and persists. A disabled channel is not a favourite and is not served.
+func (l *Lineup) SetDisabled(guide string, off bool) {
+	l.mu.Lock()
+	for i := range l.entries {
+		if l.entries[i].GuideNumber == guide {
+			l.entries[i].Disabled = off
+			if off {
+				l.entries[i].Favorite = false
+			}
+		}
+	}
+	l.mu.Unlock()
+	l.save()
+}
+
+// Lookup finds a channel whether or not it is disabled.
+func (l *Lineup) Lookup(guide string) (Entry, bool) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	for _, e := range l.entries {
+		if e.GuideNumber == guide {
+			return e, true
+		}
+	}
+	return Entry{}, false
 }
 
 // ProgramName implements hub's program namer.
