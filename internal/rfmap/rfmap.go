@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -56,6 +57,7 @@ type Store struct {
 	rf    map[uint64]*RF
 	saved time.Time
 	dirty bool
+	rev   atomic.Uint64 // changes when the set of programmes of an RF channel does
 }
 
 // saveEvery limits how often changes are written out.
@@ -128,6 +130,7 @@ func (s *Store) NoteMux(freq uint64, modulation string, tsid uint16, progs []Pro
 		next[p.Number] = &p
 	}
 	r.Programs = next
+	s.rev.Add(1)
 	s.touchLocked(now)
 }
 
@@ -239,3 +242,7 @@ func (s *Store) Snapshot() []RF {
 	}
 	return out
 }
+
+// Rev changes whenever the programmes of an RF channel change, so that what is
+// derived from them can be recomputed.
+func (s *Store) Rev() uint64 { return s.rev.Load() }

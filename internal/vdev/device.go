@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"hdhrmux/internal/chanmap"
+	"hdhrmux/internal/chanprefs"
 	"hdhrmux/internal/config"
 	"hdhrmux/internal/hdhrproto"
 	"hdhrmux/internal/hub"
@@ -186,12 +187,14 @@ func (c *Config) defaults() {
 }
 
 type Device struct {
-	cfg    Config
-	rf     *rfmap.Store
-	sys    sysSampler
-	live   liveState
-	hub    *hub.Hub
-	lineup *lineup.Lineup
+	cfg     Config
+	rf      *rfmap.Store
+	prefs   *chanprefs.Store // choices made on the Channels page
+	unavail unavailable
+	sys     sysSampler
+	live    liveState
+	hub     *hub.Hub
+	lineup  *lineup.Lineup
 
 	tuners []*VTuner
 
@@ -243,6 +246,17 @@ func New(cfg Config, h *hub.Hub, lu *lineup.Lineup) (*Device, error) {
 	}
 	d.rf = rf
 	h.SetRFStore(rf)
+	prefsPath := ""
+	if cfg.StateDir != "" {
+		prefsPath = filepath.Join(cfg.StateDir, "channels.json")
+	}
+	prefs, err := chanprefs.Open(prefsPath)
+	if err != nil {
+		log.Printf("channel choices: %v (starting with none)", err)
+		prefs, _ = chanprefs.Open("")
+	}
+	d.prefs = prefs
+	lu.SetHide(d.isUnavailable)
 	lu.SetHideATSC3(cfg.HideATSC3)
 	resetStreamCounts() // the counters are process-wide; a new device starts them afresh
 	h.SetLearner(d.learn)

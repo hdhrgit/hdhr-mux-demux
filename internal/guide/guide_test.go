@@ -1,6 +1,8 @@
 package guide
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -61,5 +63,62 @@ func TestPersistence(t *testing.T) {
 	}
 	if ch, n := s2.Summary(); ch != 1 || n != 1 {
 		t.Fatalf("summary %d %d", ch, n)
+	}
+}
+
+func evh(title string, start time.Time, hours int) psip.Event {
+	return psip.Event{Title: title, Start: start, Duration: time.Duration(hours) * time.Hour}
+}
+
+// A channel carried on two RF channels keeps a guide for each; the one used is chosen,
+// or else the one that goes furthest ahead.
+func TestGuidePerRFChannel(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now().Truncate(time.Hour)
+	s.Merge(psip.Guide{Frequency: 533000000, Events: map[string][]psip.Event{"24.1": {evh("short", now, 2)}}}, now)
+	s.Merge(psip.Guide{Frequency: 473000000, Events: map[string][]psip.Event{"24.1": {evh("long", now, 40)}}}, now)
+	if got := s.Events("24.1"); len(got) != 1 || got[0].Title != "long" {
+		t.Fatalf("automatic should take the guide that goes furthest ahead: %+v", got)
+	}
+	s.SetChooser(func(ch string) uint64 { return 533000000 })
+	if got := s.Events("24.1"); len(got) != 1 || got[0].Title != "short" {
+		t.Fatalf("the chosen RF channel's guide: %+v", got)
+	}
+	// a choice with no guide falls back to automatic instead of leaving the channel empty
+	s.SetChooser(func(ch string) uint64 { return 999000000 })
+	if got := s.Events("24.1"); len(got) != 1 || got[0].Title != "long" {
+		t.Fatalf("a choice with no guide should fall back: %+v", got)
+	}
+	// merging one RF channel again does not touch the other's events
+	s.Merge(psip.Guide{Frequency: 533000000, Events: map[string][]psip.Event{"24.1": {evh("short2", now.Add(2*time.Hour), 2)}}}, now)
+	s.SetChooser(func(ch string) uint64 { return 533000000 })
+	if got := s.Events("24.1"); len(got) != 2 {
+		t.Errorf("533's own events: %+v", got)
+	}
+	if ch, n := s.Summary(); ch != 1 || n != 2 {
+		t.Errorf("summary %d channels %d events, want the chosen guide's 1 and 2", ch, n)
+	}
+}
+
+// Files written before guides were kept per RF channel still load, and their events
+// give way once the RF channel is known.
+func TestGuideFileFromBeforeRFChannelsWasKept(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "epg.json")
+	now := time.Now().Truncate(time.Hour)
+	old := map[string][]psip.Event{"7.1": {evh("old", now, 3)}}
+	b, _ := json.Marshal(old)
+	os.WriteFile(path, b, 0o644)
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Events("7.1"); len(got) != 1 || got[0].Title != "old" {
+		t.Fatalf("old file: %+v", got)
+	}
+	s.Merge(psip.Guide{Frequency: 177000000, Events: map[string][]psip.Event{"7.1": {evh("new", now, 3)}}}, now)
+	s.Flush()
+	s2, _ := Open(path)
+	if got := s2.Events("7.1"); len(got) != 1 || got[0].Title != "new" {
+		t.Fatalf("after merging with a known RF channel and a reload: %+v", got)
 	}
 }

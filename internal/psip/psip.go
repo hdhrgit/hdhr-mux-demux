@@ -326,6 +326,8 @@ func decodeBytes(mode byte, data []byte) string {
 type Guide struct {
 	Channels map[string]Channel
 	Events   map[string][]Event
+	// Frequency is the RF channel the tables were read from (set by whoever read them).
+	Frequency uint64
 }
 
 // Snapshot returns what has been collected, sorted by start time. Only
