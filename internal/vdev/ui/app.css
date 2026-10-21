@@ -329,3 +329,9 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .loc-table input[type=checkbox], .loc-table input[type=radio] { accent-color: var(--accent); width: 18px; height: 18px; cursor: pointer; }
 .loc-table input:disabled { cursor: not-allowed; }
 .lineup td b.nm { white-space: nowrap; }
+.lineup .c-fav { width: 44px; padding-right: 0; }
+.star { background: transparent; border: 0; padding: 6px; border-radius: 8px; cursor: pointer; line-height: 0; }
+.star:hover:not(:disabled) { background: var(--bg-2); }
+.star:disabled { cursor: default; }
+.lineup tr.off td:not(.c-fav) { opacity: .5; }
+.lineup tr.off .nm { text-decoration: line-through; }

@@ -3591,3 +3591,87 @@ func TestActivityShowsWhatOtherApplicationsWatch(t *testing.T) {
 		t.Errorf("watching %+v, want 14.3 and its name", w)
 	}
 }
+
+// A client flips a channel between enabled, favourite and disabled the way it does on a
+// device (lineup.post?favorite=): only this lineup changes, and the web page does the same.
+func TestChannelStatesFlipLikeOnADevice(t *testing.T) {
+	e := setup(t, []int{1}, 1, nil)
+	e.lu.Replace(testLineup)
+	post := func(v string) {
+		t.Helper()
+		resp, err := http.Post(e.api+"/lineup.post?favorite="+v, "", nil)
+		if err != nil || resp.StatusCode != 200 {
+			t.Fatalf("lineup.post %s: %v %v", v, resp, err)
+		}
+	}
+	numbers := func(q string) map[string]map[string]any {
+		t.Helper()
+		var l []map[string]any
+		getJSON(t, e.api+"/lineup.json"+q, &l)
+		out := map[string]map[string]any{}
+		for _, c := range l {
+			out[c["GuideNumber"].(string)] = c
+		}
+		return out
+	}
+	post("%2B7.1") // +7.1
+	if c := numbers("")["7.1"]; c == nil || c["Favorite"] != float64(1) {
+		t.Fatalf("7.1 should be a favourite: %v", c)
+	}
+	post("x7.1")
+	if numbers("")["7.1"] != nil {
+		t.Fatal("a disabled channel is still in the lineup")
+	}
+	if c := numbers("?show=found")["7.1"]; c == nil || c["Enabled"] != float64(0) || c["Favorite"] != nil {
+		t.Fatalf("a disabled channel is listed with Enabled 0 and no star in ?show=found: %v", c)
+	}
+	if r, err := http.Get(e.http + "/auto/v7.1"); err == nil {
+		r.Body.Close()
+		if r.StatusCode == 200 {
+			t.Error("a disabled channel was tuned")
+		}
+	}
+
+	// the web page: enable it again, then make another a favourite
+	put := func(n, state string) int {
+		req, _ := http.NewRequest("PUT", e.api+"/ui/api/lineup/"+n, strings.NewReader(`{"state":"`+state+`"}`))
+		req.Header.Set("X-Requested-With", "hdhr-mux-ui")
+		r, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		return r.StatusCode
+	}
+	if c := put("7.1", "normal"); c != 200 {
+		t.Fatalf("PUT normal: %d", c)
+	}
+	if numbers("")["7.1"] == nil {
+		t.Fatal("7.1 was not enabled again")
+	}
+	if c := put("7.2", "favorite"); c != 200 || numbers("")["7.2"]["Favorite"] != float64(1) {
+		t.Fatalf("PUT favorite: %d", c)
+	}
+	if put("7.2", "bogus") != 400 || put("99.9", "normal") != 404 {
+		t.Error("bad state or unknown channel should be refused")
+	}
+	var ui struct {
+		Editable bool
+		Channels []struct {
+			Number   string
+			Favorite bool
+			Disabled bool
+		}
+	}
+	post("x14.1")
+	getJSON(t, e.api+"/ui/api/lineup", &ui)
+	found := false
+	for _, c := range ui.Channels {
+		if c.Number == "14.1" {
+			found = c.Disabled
+		}
+	}
+	if !ui.Editable || !found {
+		t.Errorf("the page lists a disabled channel (editable %v, found %v)", ui.Editable, found)
+	}
+}
