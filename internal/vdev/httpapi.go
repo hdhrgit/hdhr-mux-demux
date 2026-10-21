@@ -110,6 +110,7 @@ type lineupJSONEntry struct {
 	AudioCodec        string `json:",omitempty"`
 	HD                int    `json:",omitempty"`
 	Favorite          int    `json:",omitempty"`
+	Enabled           *int   `json:",omitempty"` // 0 for a disabled channel (listed with ?show=found)
 	DRM               int    `json:",omitempty"`
 	URL               string
 }
@@ -129,6 +130,10 @@ func (d *Device) handleLineupJSON(w http.ResponseWriter, r *http.Request) {
 		}
 		if e.Favorite {
 			j.Favorite = 1
+		}
+		if e.Disabled {
+			zero := 0
+			j.Enabled = &zero
 		}
 		if e.DRM {
 			j.DRM = 1
@@ -199,8 +204,17 @@ func (d *Device) handleLineupPost(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, f := range q["favorite"] {
 		for _, item := range strings.Split(f, ",") {
-			if len(item) > 1 && (item[0] == '+' || item[0] == '-' || item[0] == ' ') {
-				d.lineup.SetFavorite(item[1:], item[0] != '-')
+			// as the devices take it: +7.1 favourite, -7.1 an ordinary enabled channel, x7.1 disabled
+			if len(item) > 1 {
+				switch item[0] {
+				case '+', ' ':
+					d.lineup.SetFavorite(item[1:], true)
+				case '-':
+					d.lineup.SetFavorite(item[1:], false)
+					d.lineup.SetDisabled(item[1:], false)
+				case 'x', 'X':
+					d.lineup.SetDisabled(item[1:], true)
+				}
 			}
 		}
 	}
@@ -292,10 +306,10 @@ func (d *Device) handleIndex(w http.ResponseWriter, r *http.Request) {
 func (d *Device) handleLineupHTML(w http.ResponseWriter, r *http.Request) {
 	sbase := d.streamBase(r)
 	d.page(w, "HDHomeRun Channel Lineup", "Channel Lineup", func() {
-		fmt.Fprint(w, "<table><tr><th>Channel<th>Name<th>RF<th>Program<th>Codec<th>Stream")
+		fmt.Fprint(w, "<table><tr><th>Status<th>Channel<th>Name<th>RF<th>Program<th>Codec<th>Stream")
 		for _, e := range d.lineup.Entries(true) {
 			url := sbase + "/auto/v" + e.GuideNumber
-			fmt.Fprintf(w, "<tr><td>%s<td>%s<td>%.0f MHz %s<td>%d<td>%s/%s<td><a href=\"%s\">%s</a>", html.EscapeString(e.GuideNumber),
+			fmt.Fprintf(w, "<tr><td>%s<td>%s<td>%s<td>%.0f MHz %s<td>%d<td>%s/%s<td><a href=\"%s\">%s</a>", lineupMark(e), html.EscapeString(e.GuideNumber),
 				html.EscapeString(e.GuideName), float64(e.Frequency)/1e6, html.EscapeString(e.Modulation), e.Program,
 				html.EscapeString(e.VideoCodec), html.EscapeString(e.AudioCodec), html.EscapeString(url), html.EscapeString(url))
 		}
@@ -796,4 +810,15 @@ func pump(ctx context.Context, w http.ResponseWriter, rc *http.ResponseControlle
 			}
 		}
 	}
+}
+
+// lineupMark is how /lineup.html shows what a channel is: a star, a cross, or nothing.
+func lineupMark(e lineup.Entry) string {
+	switch {
+	case e.Disabled:
+		return "&#10005; disabled"
+	case e.Favorite:
+		return "&#9733; favourite"
+	}
+	return ""
 }
