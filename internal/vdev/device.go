@@ -456,8 +456,11 @@ func (d *Device) discover(remote net.IP, devType, devID uint32, direct bool) *hd
 	if devID != hdhrproto.DeviceIDWildcard && devID != d.cfg.DeviceID {
 		return nil
 	}
-	if d.cfg.Hidden && !direct && devID == hdhrproto.DeviceIDWildcard {
+	if d.cfg.Hidden && (!direct || d.cfg.Setup != "") && devID == hdhrproto.DeviceIDWildcard { // in setup mode: nothing to offer, even to those who ask
 		return nil // not discoverable: only answer those who ask for us by ID
+	}
+	if d.cfg.Hidden && direct && devID == hdhrproto.DeviceIDWildcard && d.lv().LogRequests {
+		log.Printf("req: discover from %v answered although not discoverable: it was addressed to us", remote)
 	}
 	base := d.baseURL(localFor(remote))
 	r := &hdhrproto.Packet{Type: hdhrproto.TypeDiscoverRpy}

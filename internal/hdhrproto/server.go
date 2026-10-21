@@ -75,8 +75,14 @@ func dispatch(h Handler, remote net.IP, req *Packet, direct bool) *Packet {
 }
 
 // ServeUDP answers discovery and get/set requests received on pc until it is
-// closed.
+// closed. Where the system says which address a request was sent to (Linux), a
+// request addressed to one of this machine's own addresses counts as made on purpose,
+// like one over TCP, and a broadcast does not.
 func ServeUDP(pc net.PacketConn, h Handler) {
+	if uc, ok := pc.(*net.UDPConn); ok && enablePktinfo(uc) {
+		serveUDPAddressed(uc, h)
+		return
+	}
 	buf := make([]byte, 2048)
 	for {
 		n, addr, err := pc.ReadFrom(buf)
@@ -95,6 +101,43 @@ func ServeUDP(pc net.PacketConn, h Handler) {
 			pc.WriteTo(rep.Encode(), addr)
 		}
 	}
+}
+
+// serveUDPAddressed is ServeUDP for a socket that reports each datagram's destination.
+func serveUDPAddressed(uc *net.UDPConn, h Handler) {
+	buf := make([]byte, 2048)
+	oob := make([]byte, 128)
+	for {
+		n, oobn, _, addr, err := uc.ReadMsgUDP(buf, oob)
+		if err != nil {
+			return
+		}
+		req, err := Decode(buf[:n])
+		if err != nil {
+			continue
+		}
+		if rep := dispatch(h, addr.IP, req, isOwnAddress(destinationOf(oob[:oobn]))); rep != nil {
+			uc.WriteTo(rep.Encode(), addr)
+		}
+	}
+}
+
+// isOwnAddress reports whether ip is one of this machine's own unicast addresses (so
+// not a broadcast or multicast one).
+func isOwnAddress(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && n.IP.Equal(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // ServeTCP accepts control connections until ln is closed.

@@ -1591,8 +1591,10 @@ func TestTunerListDefinesTheVirtualDevice(t *testing.T) {
 // Hidden: not discoverable by wildcard, still reachable by device ID or address.
 func TestNotDiscoverable(t *testing.T) {
 	e := setup(t, []int{1}, 1, func(c *vdev.Config) { c.Hidden = true })
-	if infos, _ := hdhrproto.Discover([]string{e.ctl}, 600*time.Millisecond); len(infos) != 0 {
-		t.Fatalf("a hidden multiplexer answered wildcard discovery: %+v", infos)
+	// (a request sent to its own address, as opposed to a broadcast, is answered: see
+	// the hdhrproto test for the broadcast)
+	if infos, _ := hdhrproto.Discover([]string{e.ctl}, 600*time.Millisecond); len(infos) != 1 {
+		t.Fatalf("a hidden multiplexer did not answer wildcard discovery sent to its address: %+v", infos)
 	}
 	req := &hdhrproto.Packet{Type: hdhrproto.TypeDiscoverReq}
 	req.AddU32(hdhrproto.TagDeviceType, hdhrproto.DeviceTypeTuner)
