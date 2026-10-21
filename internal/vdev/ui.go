@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -500,6 +501,10 @@ func (d *Device) otherWatching(pool *upstream.Pool, dev uint32, idx int, freq ui
 			nums = append(nums, n)
 		}
 		sort.Slice(nums, func(i, j int) bool { return nums[i] < nums[j] })
+		// programmes with the same audio and video are one: there is no telling which of them it is
+		type group struct{ nums, names []string }
+		groups := map[string]*group{}
+		var order []string
 		for _, n := range nums {
 			p := r.Programs[n]
 			if len(p.PIDs) == 0 || p.Channel == "" {
@@ -512,9 +517,30 @@ func (d *Device) otherWatching(pool *upstream.Pool, dev uint32, idx int, freq ui
 					break
 				}
 			}
-			if all {
-				out = append(out, make1(p.Channel, p.Name, true))
+			if !all {
+				continue
 			}
+			key := fmt.Sprint(p.PIDs)
+			g := groups[key]
+			if g == nil {
+				g = &group{}
+				groups[key] = g
+				order = append(order, key)
+			}
+			name := p.Name
+			if e, ok := d.lineup.Find(p.Channel); ok {
+				name = e.GuideName
+			}
+			g.nums = append(g.nums, p.Channel)
+			if name != "" && !slices.Contains(g.names, name) {
+				g.names = append(g.names, name)
+			}
+		}
+		for _, key := range order {
+			g := groups[key]
+			o := make1(g.nums[0], "", true)
+			o.Channel, o.Name = strings.Join(g.nums, " / "), strings.Join(g.names, " / ")
+			out = append(out, o)
 		}
 	}
 	return out
