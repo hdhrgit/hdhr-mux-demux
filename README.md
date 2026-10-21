@@ -424,7 +424,10 @@ are embedded in the binary.
   figures, plus `hdhrmux_dropped_batches_total`, are in `/metrics` (`process_*`, `go_*`) for Prometheus
   or Netdata.
 * **Lineup** – every channel with what is on now and next, search, filters (HD, being watched,
-  favourites), and a button that copies the channel's stream URL.
+  favourites), and a button that copies the channel's stream URL. The star column
+  flips a channel between enabled, favourite and disabled (as on a device); it changes this
+  multiplexer's copy only, and a client doing the same (`lineup.post?favorite=+7.1`, `-7.1`, `x7.1`) has the same effect.
+  Disabled channels are left out of the lineup, playlist and guide and are not tuned.
 * **Channels** – where each channel is received. Most are on one RF channel; some stations are carried
   on two or more (2.1 to 2.4 and 4.1 are on 545 and 575 MHz in the author's market, 20.1 on 515 and 581,
   24.1 on 473 and 533). The page lists those first, with a row for every place: the name the multiplex

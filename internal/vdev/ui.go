@@ -2,6 +2,7 @@ package vdev
 
 import (
 	"embed"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -66,6 +67,7 @@ func (d *Device) uiRoutes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("GET /ui/api/activity", d.handleUIActivity)
 	mux.HandleFunc("GET /ui/api/lineup", d.handleUILineup)
+	mux.HandleFunc("PUT /ui/api/lineup/{number}", d.handleUILineupPut)
 	mux.HandleFunc("GET /ui/api/channels", d.handleUIChannels)
 	mux.HandleFunc("PUT /ui/api/channels/{number}", d.handleUIChannelPut)
 	d.settingsRoutes(mux)
@@ -415,6 +417,7 @@ type uiChannel struct {
 	Program   uint16       `json:"program"`
 	HD        bool         `json:"hd,omitempty"`
 	Favorite  bool         `json:"favorite,omitempty"`
+	Disabled  bool         `json:"disabled,omitempty"`
 	Codec     string       `json:"codec,omitempty"`
 	Modul     string       `json:"modulation,omitempty"`
 	Now       *uiProgramme `json:"now,omitempty"`
@@ -435,8 +438,8 @@ func (d *Device) handleUILineup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	out := []uiChannel{}
-	for _, e := range d.lineup.Entries(false) {
-		c := uiChannel{Number: e.GuideNumber, Name: e.GuideName, Frequency: e.Frequency, Program: e.Program, HD: e.HD,
+	for _, e := range d.lineup.Entries(true) {
+		c := uiChannel{Disabled: e.Disabled, Number: e.GuideNumber, Name: e.GuideName, Frequency: e.Frequency, Program: e.Program, HD: e.HD,
 			Favorite: e.Favorite, Modul: e.Modulation, Watching: watching[e.GuideNumber], URL: sbase + "/auto/v" + e.GuideNumber}
 		if e.VideoCodec != "" {
 			c.Codec = e.VideoCodec
@@ -448,7 +451,38 @@ func (d *Device) handleUILineup(w http.ResponseWriter, r *http.Request) {
 		out = append(out, c)
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, map[string]any{"channels": out})
+	writeJSON(w, map[string]any{"channels": out, "editable": d.adminCheck(nil, r, false) && !d.cfg.SettingsLocked})
+}
+
+// handleUILineupPut sets what a channel is in this lineup: "normal", "favorite" or
+// "disabled". The devices are not told: it is this multiplexer's own copy.
+func (d *Device) handleUILineupPut(w http.ResponseWriter, r *http.Request) {
+	if !d.adminCheck(w, r, true) {
+		return
+	}
+	number := r.PathValue("number")
+	if _, ok := d.lineup.Lookup(number); !ok {
+		writeJSONStatus(w, http.StatusNotFound, map[string]any{"error": "no such channel"})
+		return
+	}
+	var p struct{ State string }
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<12)).Decode(&p); err != nil {
+		writeJSONStatus(w, http.StatusBadRequest, map[string]any{"error": "bad request: " + err.Error()})
+		return
+	}
+	switch p.State {
+	case "normal":
+		d.lineup.SetFavorite(number, false)
+		d.lineup.SetDisabled(number, false)
+	case "favorite":
+		d.lineup.SetFavorite(number, true)
+	case "disabled":
+		d.lineup.SetDisabled(number, true)
+	default:
+		writeJSONStatus(w, http.StatusBadRequest, map[string]any{"error": "state must be normal, favorite or disabled"})
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
 }
 
 // otherWatching reads from the device what another application has selected on a
