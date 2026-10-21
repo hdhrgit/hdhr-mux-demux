@@ -3592,6 +3592,46 @@ func TestActivityShowsWhatOtherApplicationsWatch(t *testing.T) {
 	}
 }
 
+type lockedBuf struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedBuf) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+func (l *lockedBuf) String() string { l.mu.Lock(); defer l.mu.Unlock(); return l.b.String() }
+
+// "Log every request" can be limited to what arrives on some of the ports.
+func TestRequestLogCanBeLimitedByPort(t *testing.T) {
+	var buf lockedBuf
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	e := setup(t, []int{1}, 1, func(c *vdev.Config) { c.LogRequests, c.LogRequestsOn = true, "web, tcp" })
+	getJSON(t, e.api+"/discover.json", &map[string]any{})     // web
+	hdhrproto.Discover([]string{e.ctl}, 300*time.Millisecond) // udp
+	ctl := hdhrproto.NewControl(e.ctl)                        // tcp
+	ctl.Get("/sys/model")
+	ctl.Close()
+	if r, err := http.Get(e.http + "/auto/v7.1"); err == nil { // stream port
+		r.Body.Close()
+	}
+	out := buf.String()
+	for _, want := range []string{"req: http ", "/discover.json", "req: control "} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log lacks %q", want)
+		}
+	}
+	if strings.Contains(out, "req: discover") {
+		t.Error("a udp request was logged although only web and tcp were asked for")
+	}
+	if strings.Contains(out, "/auto/v7.1") {
+		t.Error("a stream-port request was logged although only web and tcp were asked for")
+	}
+}
+
 // A client flips a channel between enabled, favourite and disabled the way it does on a
 // device (lineup.post?favorite=): only this lineup changes, and the web page does the same.
 func TestChannelStatesFlipLikeOnADevice(t *testing.T) {

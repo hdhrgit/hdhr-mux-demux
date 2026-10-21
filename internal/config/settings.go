@@ -96,6 +96,7 @@ var schema = []Field{
 	{Key: "lineup.scan_from", Group: "Advanced", Label: "Scan from channel", Type: "int", Placeholder: "0 (whole map)", Help: "The first RF channel number the multiplexer's own scan tries."},
 	{Key: "lineup.scan_to", Group: "Advanced", Label: "Scan to channel", Type: "int", Placeholder: "0 (whole map)", Help: "The last RF channel number the multiplexer's own scan tries."},
 	{Key: "log_requests", Group: "Diagnostics", Label: "Log every request", Type: "bool", Help: "Write every client request to the log. Noisy; for finding out what a client does."},
+	{Key: "log_requests_on", Group: "Diagnostics", Label: "Log requests received on", Type: "text", Placeholder: "all", Help: "With Log every request on, only the requests that arrive on these, separated by commas: web (the web / API port), udp and tcp (the control port), stream (the streaming port). Empty means all."},
 	{Key: "pprof_listen", Group: "Diagnostics", Label: "Profiling address", Type: "text", Placeholder: "off", Help: "For example 127.0.0.1:6060. Go profiling endpoint; leave empty unless you are debugging."},
 }
 
