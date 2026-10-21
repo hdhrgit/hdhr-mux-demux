@@ -436,6 +436,17 @@ func localFor(remote net.IP) string {
 // ---- hdhrproto.Handler -------------------------------------------------
 
 func (d *Device) Discover(remote net.IP, devType, devID uint32) *hdhrproto.Packet {
+	return d.discover(remote, devType, devID, false)
+}
+
+// DiscoverDirect answers a discovery request that came over a TCP connection the
+// client made to this address itself: being hidden only keeps the multiplexer out
+// of broadcast discovery.
+func (d *Device) DiscoverDirect(remote net.IP, devType, devID uint32) *hdhrproto.Packet {
+	return d.discover(remote, devType, devID, true)
+}
+
+func (d *Device) discover(remote net.IP, devType, devID uint32, direct bool) *hdhrproto.Packet {
 	if d.lv().LogRequests {
 		log.Printf("req: discover from %v type=%08X id=%08X", remote, devType, devID)
 	}
@@ -445,7 +456,7 @@ func (d *Device) Discover(remote net.IP, devType, devID uint32) *hdhrproto.Packe
 	if devID != hdhrproto.DeviceIDWildcard && devID != d.cfg.DeviceID {
 		return nil
 	}
-	if d.cfg.Hidden && devID == hdhrproto.DeviceIDWildcard {
+	if d.cfg.Hidden && !direct && devID == hdhrproto.DeviceIDWildcard {
 		return nil // not discoverable: only answer those who ask for us by ID
 	}
 	base := d.baseURL(localFor(remote))

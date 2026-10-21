@@ -1609,6 +1609,24 @@ func TestNotDiscoverable(t *testing.T) {
 	if p, err := hdhrproto.Decode(buf[:n]); err != nil || p.Type != hdhrproto.TypeDiscoverRpy {
 		t.Fatalf("bad answer: %v %v", p, err)
 	}
+	// a client that connected over TCP knows where we are: wildcard discovery is answered there
+	wild := &hdhrproto.Packet{Type: hdhrproto.TypeDiscoverReq}
+	wild.AddU32(hdhrproto.TagDeviceType, hdhrproto.DeviceTypeWildcard)
+	wild.AddU32(hdhrproto.TagDeviceID, hdhrproto.DeviceIDWildcard)
+	tc, err := net.Dial("tcp", e.ctl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tc.Close()
+	tc.Write(wild.Encode())
+	tc.SetReadDeadline(time.Now().Add(time.Second))
+	n, err = tc.Read(buf)
+	if err != nil {
+		t.Fatalf("no answer to wildcard discovery over TCP: %v", err)
+	}
+	if p, err := hdhrproto.Decode(buf[:n]); err != nil || p.Type != hdhrproto.TypeDiscoverRpy {
+		t.Fatalf("bad TCP answer: %v %v", p, err)
+	}
 	ctl := hdhrproto.NewControl(e.ctl)
 	defer ctl.Close()
 	if v, err := ctl.Get("/sys/model"); err != nil || v == "" {

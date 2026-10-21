@@ -346,8 +346,9 @@ See [config.example.json](config.example.json). Notable keys:
   virtual device has exactly that many tuners.
 * `upstream.discover: false` – no broadcast discovery; use only `upstream.devices`.
 * `discoverable: false` – hide the multiplexer: it ignores wildcard UDP discovery and
-  does not announce over SSDP. It still answers requests naming its device ID and direct
-  connections, so add it to a client by address.
+  does not announce over SSDP. It still answers requests naming its device ID and any
+  discovery request that arrives over a TCP connection (a client that connected to its
+  address knows where it is), so add it to a client by address.
 * `upstream.mask` – `false` to pull whole multiplexes (default `true`: only the PIDs being
   watched, see *Bandwidth*).
 * `ssdp` – `false` switches SSDP/DLNA announcements and search answers off. `ssdp_ipv4`

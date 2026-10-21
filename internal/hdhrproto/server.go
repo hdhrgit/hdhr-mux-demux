@@ -19,6 +19,14 @@ type Handler interface {
 	GetSet(remote net.IP, name string, value *string, lockkey *uint32) (string, error)
 }
 
+// DirectDiscoverer is implemented by a Handler that answers a discovery request
+// differently when it arrived on a connection the client made to it on purpose (TCP):
+// such a client knows where it is, so a device that keeps out of broadcast discovery
+// still answers it.
+type DirectDiscoverer interface {
+	DiscoverDirect(remote net.IP, deviceType, deviceID uint32) *Packet
+}
+
 func (p *Packet) getSetArgs() (name string, value *string, lock *uint32, ok bool) {
 	name, ok = p.GetString(TagGetSetName)
 	if !ok {
@@ -33,7 +41,7 @@ func (p *Packet) getSetArgs() (name string, value *string, lock *uint32, ok bool
 	return
 }
 
-func dispatch(h Handler, remote net.IP, req *Packet) *Packet {
+func dispatch(h Handler, remote net.IP, req *Packet, direct bool) *Packet {
 	switch req.Type {
 	case TypeDiscoverReq:
 		dt, _ := req.GetU32(TagDeviceType)
@@ -43,6 +51,9 @@ func dispatch(h Handler, remote net.IP, req *Packet) *Packet {
 		}
 		if _, ok := req.Get(TagDeviceID); !ok {
 			di = DeviceIDWildcard
+		}
+		if dd, ok := h.(DirectDiscoverer); ok && direct {
+			return dd.DiscoverDirect(remote, dt, di)
 		}
 		return h.Discover(remote, dt, di)
 	case TypeGetSetReq:
@@ -80,7 +91,7 @@ func ServeUDP(pc net.PacketConn, h Handler) {
 		if ua, ok := addr.(*net.UDPAddr); ok {
 			ip = ua.IP
 		}
-		if rep := dispatch(h, ip, req); rep != nil {
+		if rep := dispatch(h, ip, req, false); rep != nil {
 			pc.WriteTo(rep.Encode(), addr)
 		}
 	}
@@ -123,7 +134,7 @@ func serveConn(c net.Conn, h Handler) {
 			log.Printf("hdhrproto: bad frame from %v: %v", ip, err)
 			return
 		}
-		if rep := dispatch(h, ip, req); rep != nil {
+		if rep := dispatch(h, ip, req, true); rep != nil {
 			c.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if _, err := c.Write(rep.Encode()); err != nil {
 				return
