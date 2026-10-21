@@ -468,7 +468,7 @@ function renderChannels(root) {
   root.innerHTML = `<div class="page-title"><h1>Channels</h1><p id="chan-count">–</p></div>
     <div class="toolbar"><label class="search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
       <input id="cq" type="search" placeholder="Search channels, names and RF channels" aria-label="Search" autocomplete="off"></label>
-      <div class="filters" role="group" aria-label="Filter">${[['dup', 'On several RF channels'], ['all', 'All channels']].map(([k, n]) => `<button type="button" data-f="${k}" aria-pressed="${chans.filter === k}">${n}</button>`).join('')}</div></div>
+      <div class="filters" role="group" aria-label="Filter">${[['dup', 'On multiple RF channels'], ['all', 'All channels']].map(([k, n]) => `<button type="button" data-f="${k}" aria-pressed="${chans.filter === k}">${n}</button>`).join('')}</div></div>
     <div id="chan-msg" class="chan-msg" role="status" hidden></div><div id="chan-list"><div class="skeleton"></div></div>`;
   const q = $('#cq'); q.value = chans.q;
   q.addEventListener('input', () => { chans.q = q.value; updateChannels(); });
