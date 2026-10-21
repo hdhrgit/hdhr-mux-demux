@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"hdhrmux/internal/chanprefs"
@@ -30,9 +29,17 @@ type place struct {
 
 // placesOf lists where a channel may be tuned, in the order to try: the one chosen
 // as first, then the one the devices' lineups use, then the rest by signal quality.
-// RF channels switched off for the channel are left out, so an empty answer means the
-// channel is unavailable. An ATSC 3.0 service is only ever at its own place.
+// RF channels switched off for the channel are left out, unless that leaves none (whether
+// a channel exists at all is decided in the Lineup, not here). An ATSC 3.0 service is
+// only ever at its own place.
 func (d *Device) placesOf(e lineup.Entry) []place {
+	if ps := d.placesWith(e, true); len(ps) > 0 {
+		return ps
+	}
+	return d.placesWith(e, false)
+}
+
+func (d *Device) placesWith(e lineup.Entry, useOff bool) []place {
 	pref := d.prefs.Get(e.GuideNumber)
 	type cand struct {
 		place
@@ -42,7 +49,7 @@ func (d *Device) placesOf(e lineup.Entry) []place {
 	var cs []cand
 	seen := map[uint64]bool{}
 	add := func(c cand) {
-		if c.freq != 0 && !seen[c.freq] && !pref.IsOff(c.freq) {
+		if c.freq != 0 && !seen[c.freq] && !(useOff && pref.IsOff(c.freq)) {
 			seen[c.freq] = true
 			cs = append(cs, c)
 		}
@@ -92,38 +99,6 @@ func (d *Device) placesOf(e lineup.Entry) []place {
 	return out
 }
 
-// unavailable remembers which channels are switched off everywhere they are
-// received, recomputed when the choices or the places change.
-type unavailable struct {
-	mu      sync.Mutex
-	prefRev uint64
-	rfRev   uint64
-	lineRev uint64
-	set     map[string]bool
-}
-
-func (d *Device) isUnavailable(e lineup.Entry) bool {
-	if len(d.prefs.Get(e.GuideNumber).Off) == 0 {
-		return false
-	}
-	u := &d.unavail
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	if u.set == nil || u.prefRev != d.prefs.Rev() || u.rfRev != d.rf.Rev() || u.lineRev != d.lineup.Rev() {
-		u.set = map[string]bool{}
-		u.prefRev, u.rfRev, u.lineRev = d.prefs.Rev(), d.rf.Rev(), d.lineup.Rev()
-		for number, p := range d.prefs.All() {
-			if len(p.Off) == 0 {
-				continue
-			}
-			if en, ok := d.lineup.Find(number); ok && en.Frequency != 0 && len(d.placesOf(en)) == 0 {
-				u.set[number] = true
-			}
-		}
-	}
-	return u.set[e.GuideNumber]
-}
-
 type cpSignal struct {
 	SS     int    `json:"ss"`
 	SNQ    int    `json:"snq"`
@@ -161,9 +136,8 @@ type cpChannel struct {
 	Locations []cpLocation `json:"locations"`
 	// What was chosen (0 = not chosen: the lineup's place for video, the guide that
 	// goes furthest ahead for the guide).
-	Video       uint64 `json:"video,omitempty"`
-	Guide       uint64 `json:"guide,omitempty"`
-	Unavailable bool   `json:"unavailable,omitempty"` // switched off everywhere
+	Video uint64 `json:"video,omitempty"`
+	Guide uint64 `json:"guide,omitempty"`
 }
 
 type cpView struct {
@@ -219,11 +193,18 @@ func channelsView(entries []lineup.Entry, rf []rfmap.RF, prefs map[string]chanpr
 		sort.Slice(locs, func(i, j int) bool { return locs[i].Frequency < locs[j].Frequency })
 		pref := prefs[e.GuideNumber]
 		c.Video, c.Guide = pref.Video, pref.Guide
+		// switched off at every place (an old choice, from when that hid the channel): none is
+		allOff := len(locs) > 0
+		for i := range locs {
+			if !pref.IsOff(locs[i].Frequency) {
+				allOff = false
+			}
+		}
 		used := guideSource(e.GuideNumber)
 		first := false
 		for i := range locs {
 			l := &locs[i]
-			l.Off = pref.IsOff(l.Frequency)
+			l.Off = pref.IsOff(l.Frequency) && !allOff
 			l.Used = used != 0 && l.Frequency == used
 			// the place tried first: the chosen one, else the lineup's, among those switched on
 			if !first && !l.Off && (pref.Video == l.Frequency || (pref.Video == 0 && l.Chosen)) {
@@ -238,7 +219,6 @@ func channelsView(entries []lineup.Entry, rf []rfmap.RF, prefs map[string]chanpr
 				}
 			}
 		}
-		c.Unavailable = len(locs) > 0 && !anyOn(locs)
 		c.Locations = locs
 		if len(locs) > 1 {
 			out.Duplicates++
@@ -323,6 +303,16 @@ func (d *Device) handleUIChannelPut(w http.ResponseWriter, r *http.Request) {
 			writeJSONStatus(w, http.StatusBadRequest, map[string]any{"error": fmt.Sprintf("%d Hz is not a place %s is received on", f, number)})
 			return
 		}
+	}
+	offAll := len(known) > 0
+	for f, ok := range known {
+		if ok && !(chanprefs.Pref{Off: p.Off}).IsOff(f) {
+			offAll = false
+		}
+	}
+	if offAll {
+		writeJSONStatus(w, http.StatusBadRequest, map[string]any{"error": "at least one RF channel has to stay on; to switch the channel off, disable it in the Lineup"})
+		return
 	}
 	if p.Video != 0 && (chanprefs.Pref{Off: p.Off}).IsOff(p.Video) {
 		writeJSONStatus(w, http.StatusBadRequest, map[string]any{"error": "the first choice for video cannot be switched off"})

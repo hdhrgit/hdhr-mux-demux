@@ -187,14 +187,13 @@ func (c *Config) defaults() {
 }
 
 type Device struct {
-	cfg     Config
-	rf      *rfmap.Store
-	prefs   *chanprefs.Store // choices made on the Channels page
-	unavail unavailable
-	sys     sysSampler
-	live    liveState
-	hub     *hub.Hub
-	lineup  *lineup.Lineup
+	cfg    Config
+	rf     *rfmap.Store
+	prefs  *chanprefs.Store // choices made on the Channels page
+	sys    sysSampler
+	live   liveState
+	hub    *hub.Hub
+	lineup *lineup.Lineup
 
 	tuners []*VTuner
 
@@ -256,7 +255,6 @@ func New(cfg Config, h *hub.Hub, lu *lineup.Lineup) (*Device, error) {
 		prefs, _ = chanprefs.Open("")
 	}
 	d.prefs = prefs
-	lu.SetHide(d.isUnavailable)
 	lu.SetHideATSC3(cfg.HideATSC3)
 	resetStreamCounts() // the counters are process-wide; a new device starts them afresh
 	h.SetLearner(d.learn)

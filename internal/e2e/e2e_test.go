@@ -3503,17 +3503,12 @@ func TestChannelChoicesDecideWhereAutoTunesAndWhichGuide(t *testing.T) {
 		t.Errorf("guide titles: automatic %q, 191 MHz %q, 177 MHz %q", auto, chosen191, chosen177)
 	}
 
-	// switched off everywhere: unavailable, and left out of the lineup
-	put("7.1", `{"off":[177000000,191000000]}`)
-	if _, rc := e.open("/auto/v7.1"); rc.StatusCode != 404 {
-		t.Errorf("a channel switched off everywhere should be unknown: %d", rc.StatusCode)
+	// the last RF channel cannot be switched off here: whether a channel exists is up to the Lineup
+	if code, _ := put("7.1", `{"off":[177000000,191000000]}`); code != 400 {
+		t.Errorf("switching off every place was accepted: %d", code)
 	}
-	var lu []map[string]any
-	getJSON(t, e.api+"/lineup.json", &lu)
-	for _, m := range lu {
-		if m["GuideNumber"] == "7.1" {
-			t.Error("7.1 is still in the lineup")
-		}
+	if _, rc := e.open("/auto/v7.1"); rc.StatusCode != 200 {
+		t.Errorf("the channel should still tune: %d", rc.StatusCode)
 	}
 	// and what is not allowed
 	if code, _ := put("7.1", `{"off":[999000000]}`); code != 400 {
