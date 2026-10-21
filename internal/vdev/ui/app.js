@@ -142,6 +142,14 @@ function viewerHTML(v, nowSec) {
       <span class="buf">buffer <span class="meter ${queue > 60 ? 'bad' : queue > 25 ? 'warn' : ''}"><i style="width:${queue}%"></i></span> ${queue}%</span>
       ${v.drops ? `<span class="drops">${v.drops} dropped</span>` : ''}</div></div>`;
 }
+function otherHTML(o, nowSec) {
+  const raw = !/^\d/.test(o.channel);
+  return `<div class="viewer">
+    <div class="v-top"><span class="chan ${raw ? 'raw' : ''}">${esc(o.channel)}</span><span class="v-name">${esc(o.name || '')}</span>
+      <span class="v-client mono">${o.inferred ? 'from the PIDs it takes' : 'selected on the tuner'}</span></div>
+    ${o.now ? programme(o.now, nowSec) : ''}
+    ${o.next ? `<div class="times"><span>Next</span><span>${o.next.placeholder ? 'to be announced' : esc(o.next.title)} · ${clock(o.next.start)}</span></div>` : ''}</div>`;
+}
 function tunerHTML(t, nowSec) {
   const sig = t.signal || { strength: 0, quality: 0, symbol: 0 };
   const state = { watching: 'Watching', other: 'Other app', idle: 'Idle' }[t.state];
@@ -152,6 +160,7 @@ function tunerHTML(t, nowSec) {
     <div class="signals">${meter('Signal', sig.strength)}${meter('Quality', sig.quality)}${meter('Symbols', sig.symbol)}
       <div>${spark(history.get(t.index) || [])}<div class="rate"><b>${(t.rxBps / 1e6).toFixed(1)}</b> Mbps in</div></div></div>
     ${t.state === 'other' ? `<div class="other-note">In use by another application${t.holder ? `: <span class="mono">${esc(t.holder)}</span>${t.holderLocal ? ' (this machine)' : ''}` : ''}${t.transport ? ` · receiving over ${esc(t.transport)}` : ''}.<br>The multiplexer leaves it alone.${t.holderLocal ? ' A program on this machine looks just like the multiplexer to the device, since both use this address.' : ''}</div>` : ''}
+    ${t.state === 'other' && t.watching && t.watching.length ? `<div class="viewers">${t.watching.map((o) => otherHTML(o, nowSec)).join('')}</div>` : ''}
     ${t.viewers.length ? `<div class="viewers">${t.viewers.map((v) => viewerHTML(v, nowSec)).join('')}</div>` : ''}</div>`;
 }
 function statCard(label, value, unit, sub, extra = '', cls = '') {

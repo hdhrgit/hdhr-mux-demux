@@ -15,8 +15,10 @@ import (
 	"time"
 
 	"hdhrmux/internal/hdhrproto"
+	"hdhrmux/internal/hub"
 	"hdhrmux/internal/lineup"
 	"hdhrmux/internal/psip"
+	"hdhrmux/internal/ts"
 	"hdhrmux/internal/upstream"
 )
 
@@ -120,10 +122,20 @@ type uiTuner struct {
 	RxBPS     int       `json:"rxBps"` // pulled from the device
 	TxBPS     int       `json:"txBps"` // delivered to clients
 	// For state "other": who holds the physical tuner, as the device reports it.
-	Holder      string     `json:"holder,omitempty"`      // address holding the lock
-	HolderLocal bool       `json:"holderLocal,omitempty"` // ... and it is this machine
-	Transport   string     `json:"transport,omitempty"`   // udp, rtp or http: how it receives
-	Viewers     []uiViewer `json:"viewers"`
+	Holder      string        `json:"holder,omitempty"`      // address holding the lock
+	HolderLocal bool          `json:"holderLocal,omitempty"` // ... and it is this machine
+	Transport   string        `json:"transport,omitempty"`   // udp, rtp or http: how it receives
+	Watching    []uiOtherChan `json:"watching,omitempty"`    // what the other application is tuned to, read from the device
+	Viewers     []uiViewer    `json:"viewers"`
+}
+
+// uiOtherChan is a channel another application has selected on a tuner.
+type uiOtherChan struct {
+	Channel  string       `json:"channel"`
+	Name     string       `json:"name,omitempty"`
+	Now      *uiProgramme `json:"now,omitempty"`
+	Next     *uiProgramme `json:"next,omitempty"`
+	Inferred bool         `json:"inferred,omitempty"` // worked out from the PIDs it asked for
 }
 
 type uiStream struct {
@@ -186,12 +198,12 @@ func (d *Device) entryFor(label string) (lineup.Entry, bool) {
 // that is this machine (another program here, such as tvheadend, looks exactly
 // like us from the device's side), and how it receives the stream. Answers are
 // cached for a few seconds: the activity page asks every two.
-func (d *Device) holderOf(idx int) (holder string, local bool, transport string) {
+func (d *Device) holderOf(idx int, freq uint64) (holder string, local bool, transport string, watching []uiOtherChan) {
 	holderMu.Lock()
 	c, ok := holderCache[idx]
 	holderMu.Unlock()
 	if ok && time.Since(c.at) < 4*time.Second {
-		return c.holder, c.local, c.transport
+		return c.holder, c.local, c.transport, c.watching
 	}
 	pool := d.hub.Pool()
 	if ref, found := pool.Resolve(idx); found && ref.Device != nil {
@@ -204,17 +216,19 @@ func (d *Device) holderOf(idx int) (holder string, local bool, transport string)
 				transport = scheme
 			}
 		}
+		watching = d.otherWatching(pool, ref.DeviceID, ref.Index, freq)
 	}
 	holderMu.Lock()
-	holderCache[idx] = holderInfo{holder, local, transport, time.Now()}
+	holderCache[idx] = holderInfo{holder, local, transport, watching, time.Now()}
 	holderMu.Unlock()
-	return holder, local, transport
+	return holder, local, transport, watching
 }
 
 type holderInfo struct {
 	holder    string
 	local     bool
 	transport string
+	watching  []uiOtherChan
 	at        time.Time
 }
 
@@ -311,7 +325,7 @@ func (d *Device) activity() uiActivity {
 				t.Frequency, _ = strconv.ParseUint(f, 10, 64)
 			}
 			t.State = "other"
-			t.Holder, t.HolderLocal, t.Transport = d.holderOf(v.idx)
+			t.Holder, t.HolderLocal, t.Transport, t.Watching = d.holderOf(v.idx, t.Frequency)
 			t.RxBPS = st.BPS
 			t.Signal = &uiSignal{st.SS, st.SNQ, st.SEQ}
 			a.Summary.OtherTuners++
@@ -434,4 +448,74 @@ func (d *Device) handleUILineup(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, map[string]any{"channels": out})
+}
+
+// otherWatching reads from the device what another application has selected on a
+// tuner: the program it asked for (the device's streaminfo names it with the channel
+// number the station gives it), or, for an application that selects PIDs instead
+// (tvheadend), the programmes of the multiplex its filter takes completely.
+func (d *Device) otherWatching(pool *upstream.Pool, dev uint32, idx int, freq uint64) []uiOtherChan {
+	now := time.Now()
+	make1 := func(num, name string, inferred bool) uiOtherChan {
+		o := uiOtherChan{Channel: num, Name: name, Inferred: inferred}
+		if e, ok := d.lineup.Find(num); ok {
+			o.Name = e.GuideName
+		}
+		o.Now, o.Next = d.nowNext(num, now)
+		return o
+	}
+	prog := 0
+	if v, err := pool.RawGet(dev, idx, "program"); err == nil {
+		prog, _ = strconv.Atoi(strings.TrimSpace(v))
+	}
+	if prog > 0 {
+		if info, err := pool.RawGet(dev, idx, "streaminfo"); err == nil {
+			for _, e := range hub.ParseStreamInfo(info, freq, "", "") {
+				if int(e.Program) == prog {
+					return []uiOtherChan{make1(e.GuideNumber, e.GuideName, false)}
+				}
+			}
+		}
+		if num, name, ok := d.lineup.ProgramName(freq, uint16(prog)); ok {
+			return []uiOtherChan{make1(num, name, false)}
+		}
+		return []uiOtherChan{{Channel: fmt.Sprintf("program %d", prog)}}
+	}
+	// no program: a client that takes PIDs. A programme counts when its audio and video are all let through.
+	v, err := pool.RawGet(dev, idx, "filter")
+	if err != nil {
+		return nil
+	}
+	set, err := ts.ParsePIDSet(v)
+	if err != nil || set.Empty() {
+		return nil
+	}
+	var out []uiOtherChan
+	for _, r := range d.rf.Snapshot() {
+		if r.Frequency != freq {
+			continue
+		}
+		nums := make([]uint16, 0, len(r.Programs))
+		for n := range r.Programs {
+			nums = append(nums, n)
+		}
+		sort.Slice(nums, func(i, j int) bool { return nums[i] < nums[j] })
+		for _, n := range nums {
+			p := r.Programs[n]
+			if len(p.PIDs) == 0 || p.Channel == "" {
+				continue
+			}
+			all := true
+			for _, pid := range p.PIDs {
+				if !set.Has(pid) {
+					all = false
+					break
+				}
+			}
+			if all {
+				out = append(out, make1(p.Channel, p.Name, true))
+			}
+		}
+	}
+	return out
 }

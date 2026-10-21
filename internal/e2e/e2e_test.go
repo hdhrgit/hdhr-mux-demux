@@ -3544,3 +3544,30 @@ func TestGuidePassFindsStationsOnOtherRFChannels(t *testing.T) {
 	}
 	t.Fatal("7.1 is not on the Channels page")
 }
+
+// What another application is watching is read from the device: the program it
+// selected on the tuner, named with the channel number the station gives it.
+func TestActivityShowsWhatOtherApplicationsWatch(t *testing.T) {
+	e := setup(t, []int{4}, 4, nil)
+	e.lu.Replace(testLineup)
+	foreign, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/tuner2/ch473000000-3", e.fakes[0].StreamPort()))
+	if err != nil || foreign.StatusCode != 200 {
+		t.Fatalf("foreign client: %v %v", foreign, err)
+	}
+	defer foreign.Body.Close()
+	type watching struct{ Channel, Name string }
+	var a struct {
+		Tuners []struct {
+			State    string
+			Watching []watching
+		}
+	}
+	waitFor(t, "the channel the other application watches", 8*time.Second, func() bool {
+		a.Tuners = nil
+		getJSON(t, e.api+"/ui/api/activity", &a)
+		return len(a.Tuners) == 4 && len(a.Tuners[2].Watching) == 1
+	})
+	if w := a.Tuners[2].Watching[0]; w.Channel != "14.3" || w.Name == "" {
+		t.Errorf("watching %+v, want 14.3 and its name", w)
+	}
+}
