@@ -3341,3 +3341,64 @@ func TestPlacementComesFromTheDevices(t *testing.T) {
 		t.Errorf("lineup.json?tuning for 7.1: %v", m)
 	}
 }
+
+// The Channels page shows every place a channel is received, with the signal there and
+// how far ahead its guide goes, learned from the guide pass that reads each multiplex.
+func TestChannelsPageShowsWhereChannelsAre(t *testing.T) {
+	testChannels = append(append([]fakehdhr.Channel{}, channels...),
+		fakehdhr.Channel{Frequency: 191000000, TSID: 9, Programs: []fakehdhr.Program{{Number: 5, VChannel: "7.1", Name: "ALPHA-2"}, {Number: 6, VChannel: "9.9", Name: "ZETA"}}})
+	defer func() { testChannels = nil }()
+	e := setup(t, []int{3}, 3, func(c *vdev.Config) { c.GuideHold = 2 * time.Second })
+	e.lu.Replace([]lineup.Entry{
+		{GuideNumber: "7.1", GuideName: "ALPHA", Frequency: 177000000, Program: 1},
+		{GuideNumber: "14.1", GuideName: "GAMMA", Frequency: 473000000, Program: 1},
+		{GuideNumber: "9.9", GuideName: "ZETA", Frequency: 191000000, Program: 6},
+	})
+	if _, _, err := e.dev.GuidePass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	type loc struct {
+		Frequency   uint64
+		Program     uint16
+		Name        string
+		Chosen      bool
+		Guide       bool
+		GuideHours  float64
+		GuideEvents int
+		Signal      *struct{ SS, SNQ, SEQ int }
+	}
+	var v struct {
+		Duplicates, Known int
+		Channels          []struct {
+			Number    string
+			Locations []loc
+		}
+	}
+	getJSON(t, e.api+"/ui/api/channels", &v)
+	if v.Known != 3 || v.Duplicates != 1 {
+		t.Errorf("known %d RF channels, %d duplicates; want 3 and 1", v.Known, v.Duplicates)
+	}
+	for _, c := range v.Channels {
+		switch c.Number {
+		case "7.1":
+			if len(c.Locations) != 2 || c.Locations[0].Frequency != 177000000 || c.Locations[1].Frequency != 191000000 {
+				t.Fatalf("7.1 places: %+v", c.Locations)
+			}
+			if !c.Locations[0].Chosen || c.Locations[1].Chosen {
+				t.Errorf("only the lineup's place is chosen: %+v", c.Locations)
+			}
+			for _, l := range c.Locations {
+				if !l.Guide || l.GuideEvents == 0 || l.GuideHours <= 0 || l.Name == "" || l.Signal == nil || l.Signal.SS == 0 {
+					t.Errorf("7.1 at %d Hz is missing what the pass read: %+v", l.Frequency, l)
+				}
+			}
+			if c.Locations[1].Name != "ALPHA-2" || c.Locations[1].Program != 5 {
+				t.Errorf("the other place has the name and program the multiplex gives it: %+v", c.Locations[1])
+			}
+		case "14.1":
+			if len(c.Locations) != 1 {
+				t.Errorf("14.1 should be in one place: %+v", c.Locations)
+			}
+		}
+	}
+}

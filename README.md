@@ -424,6 +424,15 @@ are embedded in the binary.
   or Netdata.
 * **Lineup** – every channel with what is on now and next, search, filters (HD, being watched,
   favourites), and a button that copies the channel's stream URL.
+* **Channels** – where each channel is received. Most are on one RF channel; some stations are carried
+  on two or more (2.1 to 2.4 and 4.1 are on 545 and 575 MHz in the author's market, 20.1 on 515 and 581,
+  24.1 on 473 and 533). The page lists those first, with a row for every place: the name the multiplex
+  gives the channel there, its program number, how well it is received (signal strength, quality and
+  symbol quality, with the device that measured it) and how many hours ahead the guide on that RF
+  channel goes (or "none": 533 MHz sends no guide at all). The place the devices' lineups use is marked.
+  "All channels" shows every channel. It is learned from the streams and guide passes that tune the
+  channels anyway and kept in `<state_dir>/rfmap.json`, so it fills in over the first guide pass
+  after a new start; nothing is tuned just for it.
 * **Appearance** (the half-moon button) – System / Light / Dark, and a choice of theme for each:
   Paper, Mist, Mint, Lilac (light) and Slate, Midnight, Dusk, Ember (dark). None of them is pure white
   or pure black. *System* follows the device and switches between your light and dark theme by

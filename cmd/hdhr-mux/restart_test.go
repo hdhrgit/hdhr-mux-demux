@@ -53,9 +53,9 @@ func TestRestartInPlace(t *testing.T) {
 	defer fake.Close()
 	httpPort := freePort(t)
 	cfg := filepath.Join(dir, "config.json")
-	os.WriteFile(cfg, []byte(fmt.Sprintf(`{"state_dir":%q,"http_listen":"127.0.0.1:%d","control_listen":"127.0.0.1:%d","stream_listen":"-","ssdp":false,
+	os.WriteFile(cfg, []byte(fmt.Sprintf(`{"state_dir":%q,"http_listen":"127.0.0.1:%d","control_listen":"127.0.0.1:0","stream_listen":"-","ssdp":false,
   "upstream":{"discover":false,"devices":[%q]},"guide":{"refresh":"0"},"lineup":{"refresh":"0"}}`,
-		filepath.Join(dir, "state"), httpPort, freePort(t), fake.Addr())), 0o644)
+		filepath.Join(dir, "state"), httpPort, fake.Addr())), 0o644)
 
 	cmd := exec.Command(bin, "-config", cfg)
 	var out syncBuf
@@ -141,7 +141,7 @@ func TestRunByHandWithHTTPOption(t *testing.T) {
 	defer fake.Close()
 	port := freePort(t)
 	cfg := filepath.Join(dir, "c.json")
-	os.WriteFile(cfg, []byte(fmt.Sprintf(`{"control_listen":"127.0.0.1:%d","stream_listen":"-","ssdp":false,"guide":{"refresh":"0"},"lineup":{"refresh":"0"}}`, freePort(t))), 0o644)
+	os.WriteFile(cfg, []byte(fmt.Sprintf(`{"control_listen":"127.0.0.1:0","stream_listen":"-","ssdp":false,"guide":{"refresh":"0"},"lineup":{"refresh":"0"}}`)), 0o644)
 
 	cmd := exec.Command(bin, "-config", cfg, "-http", fmt.Sprintf("127.0.0.1:%d", port))
 	cmd.Dir = dir
@@ -193,7 +193,7 @@ func TestStaysUpWithoutDevices(t *testing.T) {
 	}
 	port := freePort(t)
 	cfg := filepath.Join(dir, "c.json")
-	os.WriteFile(cfg, []byte(fmt.Sprintf(`{"control_listen":"127.0.0.1:%d","stream_listen":"-","ssdp":false,"upstream":{"discover":false,"devices":["127.0.0.1:1"]}}`, freePort(t))), 0o644)
+	os.WriteFile(cfg, []byte(fmt.Sprintf(`{"control_listen":"127.0.0.1:0","stream_listen":"-","ssdp":false,"upstream":{"discover":false,"devices":["127.0.0.1:1"]}}`)), 0o644)
 	cmd := exec.Command(bin, "-config", cfg, "-http", fmt.Sprintf("127.0.0.1:%d", port))
 	cmd.Dir = dir
 	var out syncBuf

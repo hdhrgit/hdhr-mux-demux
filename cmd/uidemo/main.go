@@ -53,6 +53,12 @@ var channels = []fakehdhr.Channel{
 		prog(2, "9.2", "KQED+", "Austin City Limits", "Soundstage", 44, 60)}},
 	{Frequency: 581000000, TSID: 6, Programs: []fakehdhr.Program{
 		prog(1, "11.1", "KNTV-HD", "Today", "Today with Hoda", 63, 120)}},
+	// the same stations on a second RF channel, as 2.x and 4.1 are in the real market
+	{Frequency: 575000000, TSID: 3, Programs: []fakehdhr.Program{
+		prog(1, "2.1", "KTVU-HD", "Big Noon Kickoff", "College Football", 48, 120),
+		prog(2, "2.2", "FOXWX", "Fox Weather Now", "Fox Weather Now", 7, 30),
+		prog(4, "4.1", "KRON-TV", "The Golden Bachelor", "Jeopardy!", 18, 60),
+		prog(5, "2.3", "MOVIES!", "Twins of Evil", "The Bounty Hunter", 30, 90)}},
 }
 
 // viewers: who watches what, from which address, at the start.
@@ -96,8 +102,13 @@ func main() {
 
 	lu, _ := lineup.Open("")
 	var entries []lineup.Entry
+	seen := map[string]bool{} // a channel on two RF channels is listed once, at the first
 	for _, c := range channels {
 		for _, p := range c.Programs {
+			if seen[p.VChannel] {
+				continue
+			}
+			seen[p.VChannel] = true
 			entries = append(entries, lineup.Entry{GuideNumber: p.VChannel, GuideName: p.Name, Frequency: c.Frequency, Program: p.Number,
 				HD: p.Name != "" && len(p.Name) > 3 && p.Name[len(p.Name)-3:] == "-HD", VideoCodec: "MPEG2", AudioCodec: "AC3"})
 		}
@@ -111,12 +122,13 @@ func main() {
 	cfg, _ := config.Load(cfgPath)
 	dev, err := vdev.New(vdev.Config{DeviceID: hdhrproto.MakeDeviceID(0x10900000), FriendlyName: "HDHomeRun Mux (demo)", Tuners: pool.TotalTuners(),
 		HTTPAddr: *httpAddr, StreamAddr: *streamAddr, ControlAddr: "127.0.0.1:0",
-		StateDir: tmp, Settings: config.NewManager(cfgPath, cfg), Restart: func() { log.Printf("restart requested (the demo just ignores it)") }}, h, lu)
+		GuideHold: 4 * time.Second, StateDir: tmp, Settings: config.NewManager(cfgPath, cfg), Restart: func() { log.Printf("restart requested (the demo just ignores it)") }}, h, lu)
 	if err != nil {
 		log.Fatal(err)
 	}
 	gs, _ := guide.Open("")
 	dev.SetGuide(gs)
+	go func() { time.Sleep(3 * time.Second); dev.GuidePass(context.Background()) }() // so the channels page has something to show
 	if err := dev.Start(); err != nil {
 		log.Fatal(err)
 	}
