@@ -23,6 +23,7 @@ import (
 	"hdhrmux/internal/hdhrproto"
 	"hdhrmux/internal/hub"
 	"hdhrmux/internal/lineup"
+	"hdhrmux/internal/merges"
 	"hdhrmux/internal/rfmap"
 )
 
@@ -190,6 +191,7 @@ type Device struct {
 	cfg    Config
 	rf     *rfmap.Store
 	prefs  *chanprefs.Store // choices made on the Channels page
+	merges *merges.Store    // channels said to carry the same thing
 	sys    sysSampler
 	live   liveState
 	hub    *hub.Hub
@@ -255,6 +257,16 @@ func New(cfg Config, h *hub.Hub, lu *lineup.Lineup) (*Device, error) {
 		prefs, _ = chanprefs.Open("")
 	}
 	d.prefs = prefs
+	mergesPath := ""
+	if cfg.StateDir != "" {
+		mergesPath = filepath.Join(cfg.StateDir, "merges.json")
+	}
+	mg, err := merges.Open(mergesPath)
+	if err != nil {
+		log.Printf("merged channels: %v (starting with none)", err)
+		mg, _ = merges.Open("")
+	}
+	d.merges = mg
 	lu.SetHideATSC3(cfg.HideATSC3)
 	resetStreamCounts() // the counters are process-wide; a new device starts them afresh
 	h.SetLearner(d.learn)

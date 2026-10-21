@@ -455,17 +455,87 @@ async function saveChannel(number, body) {
   const r = await fetch('/ui/api/channels/' + encodeURIComponent(number), { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'hdhr-mux-ui' }, body: JSON.stringify(body) });
   if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || 'saving failed (' + r.status + ')'); }
 }
+/* ---------- merged channels: channels that carry the same thing ---------- */
+const merges = { groups: [], editable: false, options: [], busy: false, error: '' };
+async function saveMerges(numbers) {
+  const r = await fetch('/ui/api/merges', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'hdhr-mux-ui' }, body: JSON.stringify({ groups: numbers }) });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'saving failed (' + r.status + ')');
+}
+function mergeChip(m, gi, ed) {
+  return `<span class="mchip ${m.disabled ? 'off' : ''}" title="${esc(m.name)}: received on ${m.places} RF channel${m.places === 1 ? '' : 's'}${m.disabled ? '; not listed in the Lineup' : ''}"><b>${esc(m.number)}</b> ${esc(m.name)}${m.hd ? ' <span class="tag">HD</span>' : ''}${m.disabled ? ' <small>not listed</small>' : ''}` +
+    `${ed ? `<button type="button" class="x" data-del="${gi}" data-num="${esc(m.number)}" aria-label="Take ${esc(m.number)} out of this group">×</button>` : ''}</span>`;
+}
+function mergeInput(id, ph, ed) {
+  return `<input class="minput" list="merge-options" id="${id}" placeholder="${ph}" autocomplete="off" ${ed ? '' : 'disabled'}>`;
+}
+function mergeSectionHTML() {
+  const ed = merges.editable;
+  const used = new Set(merges.groups.flat().map((m) => m.number));
+  const opts = merges.options.filter((c) => !used.has(c.number)).map((c) => `<option value="${esc(c.number)} ${esc(c.name)}"></option>`).join('');
+  const groups = merges.groups.map((g, i) => `<div class="card merge-group" data-gi="${i}"><div class="chips">${g.map((m) => mergeChip(m, i, ed)).join('')}</div>` +
+    `${ed ? `<div class="merge-add">${mergeInput('madd-' + i, 'Add a channel…', ed)}<button type="button" class="btn" data-add="${i}">Add</button></div>` : ''}</div>`).join('');
+  return `<div class="section-title">Merged channels</div>
+    <p class="muted merge-help">Channels that carry the same programme. For the tuners they count as one: a request for any of them is served by whichever is already being received, so fewer tuners are used. What is listed is decided in the Lineup: you can keep one of them or all.</p>
+    ${merges.error ? `<div class="chan-msg" role="status">${esc(merges.error)}</div>` : ''}
+    ${groups || '<div class="card empty"><h3>Nothing merged</h3>Pick two channels below.</div>'}
+    ${ed ? `<div class="card merge-new"><b>New group</b><div class="merge-add">${mergeInput('mnew-a', 'First channel…', ed)}${mergeInput('mnew-b', 'Second channel…', ed)}<button type="button" class="btn" data-new>Merge</button></div></div>` : '<p class="muted">Merging can only be changed from the local network, and not while settings are locked.</p>'}
+    <datalist id="merge-options">${opts}</datalist>`;
+}
+function updateMerges() {
+  const w = $('#merge-wrap'); if (!w) return;
+  const keep = {}; if (!merges.reset) $$('input.minput', w).forEach((i) => { if (i === document.activeElement || i.value) keep[i.id] = i.value; });
+  merges.reset = false;
+  const focus = document.activeElement && document.activeElement.id;
+  w.innerHTML = mergeSectionHTML();
+  Object.entries(keep).forEach(([id, v]) => { const i = $('#' + id, w); if (i) i.value = v; });
+  if (focus) { const f = $('#' + focus, w); if (f) f.focus(); }
+}
+async function loadMerges() {
+  const [m, l] = await Promise.all([getJSON('/ui/api/merges'), getJSON('/ui/api/lineup')]);
+  const sig = JSON.stringify([m.groups, m.editable, l.channels.length]);
+  if (sig === merges.sig) return; // nothing new: leave what is being typed alone
+  merges.sig = sig;
+  merges.groups = m.groups; merges.editable = m.editable; merges.options = l.channels;
+  updateMerges();
+}
+function numberOf(v) {
+  const n = (v || '').trim().split(/\s+/)[0];
+  return merges.options.some((c) => c.number === n) ? n : '';
+}
+async function changeMerges(numbers) {
+  merges.error = '';
+  try { await saveMerges(numbers); merges.reset = true; merges.sig = ''; await loadMerges(); } catch (err) { merges.error = err.message; updateMerges(); }
+}
+function setupMerges(root) {
+  root.addEventListener('click', (e) => {
+    const cur = merges.groups.map((g) => g.map((m) => m.number));
+    const del = e.target.closest('[data-del]');
+    if (del) { const gi = Number(del.dataset.del); cur[gi] = cur[gi].filter((n) => n !== del.dataset.num); changeMerges(cur); return; }
+    const add = e.target.closest('[data-add]');
+    if (add) {
+      const gi = Number(add.dataset.add), n = numberOf($('#madd-' + gi).value);
+      if (!n) { merges.error = 'Pick a channel from the list.'; updateMerges(); return; }
+      cur[gi].push(n); changeMerges(cur); return;
+    }
+    if (e.target.closest('[data-new]')) {
+      const a = numberOf($('#mnew-a').value), b = numberOf($('#mnew-b').value);
+      if (!a || !b || a === b) { merges.error = 'Pick two different channels from the lists.'; updateMerges(); return; }
+      cur.push([a, b]); changeMerges(cur);
+    }
+  });
+}
 function renderChannels(root) {
   root.innerHTML = `<div class="page-title"><h1>Advanced</h1><p id="chan-count">–</p></div>
     <div class="toolbar"><label class="search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
       <input id="cq" type="search" placeholder="Search channels, names and RF channels" aria-label="Search" autocomplete="off"></label></div>
-    <div id="chan-msg" class="chan-msg" role="status" hidden></div><div id="chan-list"><div class="skeleton"></div></div>`;
+    <div id="chan-msg" class="chan-msg" role="status" hidden></div><div id="chan-list"><div class="skeleton"></div></div><div id="merge-wrap"></div>`;
+  setupMerges($('#merge-wrap'));
   const q = $('#cq'); q.value = chans.q;
   q.addEventListener('input', () => { chans.q = q.value; updateChannels(); });
   const load = async () => {
     clearTimeout(timer);
     if (stopped) return;
-    try { chans.data = await getJSON('/ui/api/channels'); setConn(true); updateChannels(); } catch (e) { setConn(false); }
+    try { chans.data = await getJSON('/ui/api/channels'); setConn(true); updateChannels(); await loadMerges(); } catch (e) { setConn(false); }
     if (!stopped) timer = setTimeout(load, 8000);
   };
   const act = async (e) => {
