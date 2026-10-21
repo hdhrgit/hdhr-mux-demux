@@ -36,7 +36,8 @@ type Lineup struct {
 	path      string
 	entries   []Entry
 	rev       atomic.Uint64
-	hideATSC3 atomic.Bool // leave ATSC 3.0 channels out of listings (they still tune)
+	hideATSC3 atomic.Bool                      // leave ATSC 3.0 channels out of listings (they still tune)
+	hide      atomic.Pointer[func(Entry) bool] // entries to leave out of listings (see SetHide)
 }
 
 // Open loads the lineup from path (a missing file is an empty lineup). An
@@ -111,8 +112,9 @@ func (l *Lineup) Entries(all bool) []Entry {
 	defer l.mu.RUnlock()
 	out := make([]Entry, 0, len(l.entries))
 	hide := l.hideATSC3.Load()
+	hideFn := l.hide.Load()
 	for _, e := range l.entries {
-		if all || !e.Disabled && !(hide && e.Modulation == "atsc3") {
+		if all || !e.Disabled && !(hide && e.Modulation == "atsc3") && (hideFn == nil || !(*hideFn)(e)) {
 			out = append(out, e)
 		}
 	}
@@ -303,3 +305,9 @@ func (l *Lineup) LearnRF(es []Entry, addUnknown bool) (changed int) {
 
 // Rev counts changes to the lineup (used as the DLNA UpdateID).
 func (l *Lineup) Rev() uint64 { return l.rev.Load() }
+
+// SetHide leaves the entries f says yes to out of the listings Entries(false) gives
+// (the lineup, the playlist, the guide), like ATSC 3.0 can be left out: a channel
+// that is switched off on every RF channel it is received on. Find and
+// Entries(true) still have them.
+func (l *Lineup) SetHide(f func(Entry) bool) { l.hide.Store(&f) }

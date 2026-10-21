@@ -233,7 +233,7 @@ table.lineup { width: 100%; border-collapse: collapse; }
 .lineup .c-act { width: 130px; text-align: right; }
 .lineup .prog .title { font-weight: 550; } .lineup .prog small { color: var(--muted); display: block; font-size: 12px; }
 .lineup .prog .progress { max-width: 260px; margin: 5px 0 2px; }
-.tag { font-size: 10.5px; font-weight: 700; letter-spacing: .05em; border: 1px solid var(--border); color: var(--muted); border-radius: 6px; padding: 1px 5px; margin-left: 6px; vertical-align: 1px; }
+.tag { white-space: nowrap; font-size: 10.5px; font-weight: 700; letter-spacing: .05em; border: 1px solid var(--border); color: var(--muted); border-radius: 6px; padding: 1px 5px; margin-left: 6px; vertical-align: 1px; }
 .tag.live { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
 .btn { white-space: nowrap; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; }
 .btn:hover { background: var(--bg-2); }
@@ -296,3 +296,36 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .muted { color: var(--muted); }
 @media (max-width: 760px) { .field { grid-template-columns: 1fr; } .field.inline { grid-template-columns: 1fr auto; } .info-card dl { grid-template-columns: 1fr; gap: 2px; } .info-card dt { margin-top: 8px; } }
 #sys-wrap .cards { margin-bottom: 6px; }
+
+/* channels page */
+.chan-card { padding: 0; overflow: hidden; margin-bottom: 14px; }
+.chan-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px 10px; }
+.chan-head .chan { background: var(--accent); color: #fff; font-weight: 700; padding: 3px 10px; border-radius: 9px; font-variant-numeric: tabular-nums; }
+.chan-card.multi { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.loc-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.loc-table th { text-align: left; font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); font-weight: 600; padding: 6px 16px; border-top: 1px solid var(--border); }
+.loc-table th small { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.loc-table td { padding: 9px 16px; border-top: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.loc-table tr.chosen td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.loc-table .bad { color: var(--bad); } .loc-table .warn { color: var(--warn); }
+.bad-text { color: var(--bad); font-weight: 600; }
+.pad { padding: 0 16px 14px; margin: 0; }
+@media (max-width: 720px) { .loc-table th:nth-child(3), .loc-table td:nth-child(3) { display: none; } }
+.loc-table { table-layout: fixed; }
+.loc-table th:nth-child(1) { width: 15%; } .loc-table th:nth-child(2) { width: 22%; } .loc-table th:nth-child(3) { width: 9%; }
+.loc-table th:nth-child(4) { width: 24%; } .loc-table th:nth-child(5) { width: 14%; }
+.loc-table tr.chosen td { background: color-mix(in srgb, var(--accent-soft) 55%, transparent); }
+.loc-table.single th:nth-child(1) { width: 8%; } .loc-table.single th:nth-child(2) { width: 24%; } .loc-table.single th:nth-child(3) { width: 15%; }
+.loc-table.single th:nth-child(4) { width: 25%; } .loc-table.single th:nth-child(5) { width: 16%; }
+.loc-table.single td .chan { background: var(--accent-soft); color: var(--accent); font-weight: 700; padding: 2px 8px; border-radius: 8px; }
+.loc-table th.c-ctl, .loc-table td.c-ctl { width: 56px; text-align: center; padding-left: 4px; padding-right: 4px; }
+.loc-table tr.off td { opacity: .55; }
+.loc-table tr.off td.c-ctl { opacity: 1; }
+.chan-notes { margin: 0; padding: 10px 16px 14px; color: var(--muted); font-size: 13.5px; border-top: 1px solid var(--border); }
+.chan-notes b { color: var(--text); }
+.chan-card.unavail { border-color: var(--warn); }
+.banner.inline { margin: 0 16px 10px; }
+.chan-msg { background: color-mix(in srgb, var(--bad) 12%, var(--surface)); border: 1px solid var(--bad); border-radius: 12px; padding: 10px 14px; margin-bottom: 12px; }
+.loc-table input[type=checkbox], .loc-table input[type=radio] { accent-color: var(--accent); width: 18px; height: 18px; cursor: pointer; }
+.loc-table input:disabled { cursor: not-allowed; }
+.lineup td b.nm { white-space: nowrap; }

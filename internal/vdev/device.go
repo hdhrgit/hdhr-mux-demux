@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,10 +18,12 @@ import (
 	"time"
 
 	"hdhrmux/internal/chanmap"
+	"hdhrmux/internal/chanprefs"
 	"hdhrmux/internal/config"
 	"hdhrmux/internal/hdhrproto"
 	"hdhrmux/internal/hub"
 	"hdhrmux/internal/lineup"
+	"hdhrmux/internal/rfmap"
 )
 
 type Config struct {
@@ -184,11 +187,14 @@ func (c *Config) defaults() {
 }
 
 type Device struct {
-	cfg    Config
-	sys    sysSampler
-	live   liveState
-	hub    *hub.Hub
-	lineup *lineup.Lineup
+	cfg     Config
+	rf      *rfmap.Store
+	prefs   *chanprefs.Store // choices made on the Channels page
+	unavail unavailable
+	sys     sysSampler
+	live    liveState
+	hub     *hub.Hub
+	lineup  *lineup.Lineup
 
 	tuners []*VTuner
 
@@ -229,6 +235,28 @@ func New(cfg Config, h *hub.Hub, lu *lineup.Lineup) (*Device, error) {
 	}
 	d := &Device{cfg: cfg, hub: h, lineup: lu, quit: make(chan struct{}), source: cfg.DefaultSource}
 	d.live.init(liveOf(&cfg))
+	rfPath := ""
+	if cfg.StateDir != "" {
+		rfPath = filepath.Join(cfg.StateDir, "rfmap.json")
+	}
+	rf, err := rfmap.Open(rfPath)
+	if err != nil {
+		log.Printf("rf channel table: %v (starting with an empty one)", err)
+		rf, _ = rfmap.Open("")
+	}
+	d.rf = rf
+	h.SetRFStore(rf)
+	prefsPath := ""
+	if cfg.StateDir != "" {
+		prefsPath = filepath.Join(cfg.StateDir, "channels.json")
+	}
+	prefs, err := chanprefs.Open(prefsPath)
+	if err != nil {
+		log.Printf("channel choices: %v (starting with none)", err)
+		prefs, _ = chanprefs.Open("")
+	}
+	d.prefs = prefs
+	lu.SetHide(d.isUnavailable)
 	lu.SetHideATSC3(cfg.HideATSC3)
 	resetStreamCounts() // the counters are process-wide; a new device starts them afresh
 	h.SetLearner(d.learn)
@@ -344,6 +372,7 @@ func (d *Device) ID() uint32       { return d.cfg.DeviceID }
 
 func (d *Device) Close() {
 	close(d.quit)
+	defer d.rf.Flush()
 	if d.ssdp != nil {
 		d.ssdp.stop()
 	}
@@ -407,6 +436,17 @@ func localFor(remote net.IP) string {
 // ---- hdhrproto.Handler -------------------------------------------------
 
 func (d *Device) Discover(remote net.IP, devType, devID uint32) *hdhrproto.Packet {
+	return d.discover(remote, devType, devID, false)
+}
+
+// DiscoverDirect answers a discovery request that came over a TCP connection the
+// client made to this address itself: being hidden only keeps the multiplexer out
+// of broadcast discovery.
+func (d *Device) DiscoverDirect(remote net.IP, devType, devID uint32) *hdhrproto.Packet {
+	return d.discover(remote, devType, devID, true)
+}
+
+func (d *Device) discover(remote net.IP, devType, devID uint32, direct bool) *hdhrproto.Packet {
 	if d.lv().LogRequests {
 		log.Printf("req: discover from %v type=%08X id=%08X", remote, devType, devID)
 	}
@@ -416,8 +456,11 @@ func (d *Device) Discover(remote net.IP, devType, devID uint32) *hdhrproto.Packe
 	if devID != hdhrproto.DeviceIDWildcard && devID != d.cfg.DeviceID {
 		return nil
 	}
-	if d.cfg.Hidden && devID == hdhrproto.DeviceIDWildcard {
+	if d.cfg.Hidden && (!direct || d.cfg.Setup != "") && devID == hdhrproto.DeviceIDWildcard { // in setup mode: nothing to offer, even to those who ask
 		return nil // not discoverable: only answer those who ask for us by ID
+	}
+	if d.cfg.Hidden && direct && devID == hdhrproto.DeviceIDWildcard && d.lv().LogRequests {
+		log.Printf("req: discover from %v answered although not discoverable: it was addressed to us", remote)
 	}
 	base := d.baseURL(localFor(remote))
 	r := &hdhrproto.Packet{Type: hdhrproto.TypeDiscoverRpy}

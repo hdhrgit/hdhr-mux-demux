@@ -35,6 +35,7 @@ func (d *Device) SetGuide(s *guide.Store) {
 	d.guide.mu.Lock()
 	d.guide.store = s
 	d.guide.mu.Unlock()
+	s.SetChooser(func(number string) uint64 { return d.prefs.Get(number).Guide })
 	d.hub.SetGuideSink(func(g psip.Guide) { s.Merge(g, time.Now()) })
 }
 
@@ -71,7 +72,19 @@ func (d *Device) GuidePass(ctx context.Context) (done, total int, err error) {
 			freqs = append(freqs, e.Frequency)
 		}
 	}
+	// an RF channel every channel on it is switched off for is not tuned for its guide
+	kept := freqs[:0]
+	for _, f := range freqs {
+		if !d.rfAllOff(f) {
+			kept = append(kept, f)
+		}
+	}
+	freqs = kept
 	sort.Slice(freqs, func(i, j int) bool { return freqs[i] < freqs[j] })
+	// RF channels the lineup does not mention may carry the same stations: the ones known
+	// to are collected like the rest, the others are listened to briefly
+	extra, probes := d.otherRFChannels(seen)
+	freqs = append(freqs, extra...)
 	hold := d.lv().GuideHold
 	if hold == 0 {
 		hold = 45 * time.Second
@@ -80,34 +93,56 @@ func (d *Device) GuidePass(ctx context.Context) (done, total int, err error) {
 	if par <= 0 {
 		par = 3
 	}
-	work := make(chan uint64)
-	var wg sync.WaitGroup
 	var mu sync.Mutex
-	for i := 0; i < par; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for f := range work {
-				if err := d.hub.CollectGuide(ctx, chanmap.Spec{Modulation: "auto", Frequency: f}, hold, d.lv().GuideUnlocked); err != nil {
-					log.Printf("guide: %d Hz: %v", f, err)
-					continue
+	// run listens to the RF channels par at a time and returns when all are done
+	run := func(jobs []guideJob) {
+		work := make(chan guideJob)
+		var wg sync.WaitGroup
+		for i := 0; i < par; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for j := range work {
+					h := hold
+					if j.probe {
+						h = min(hold, probeHold)
+					}
+					err := d.hub.CollectGuide(ctx, chanmap.Spec{Modulation: "auto", Frequency: j.freq}, h, d.lv().GuideUnlocked)
+					if j.probe {
+						continue // nothing there is the usual answer
+					}
+					if err != nil {
+						log.Printf("guide: %d Hz: %v", j.freq, err)
+						continue
+					}
+					mu.Lock()
+					done++
+					mu.Unlock()
 				}
-				mu.Lock()
-				done++
-				mu.Unlock()
-			}
-		}()
-	}
-loop:
-	for _, f := range freqs {
-		select {
-		case work <- f:
-		case <-ctx.Done():
-			break loop
+			}()
 		}
+	loop:
+		for _, j := range jobs {
+			select {
+			case work <- j:
+			case <-ctx.Done():
+				break loop
+			}
+		}
+		close(work)
+		wg.Wait()
 	}
-	close(work)
-	wg.Wait()
+	var jobs []guideJob
+	for _, f := range freqs {
+		jobs = append(jobs, guideJob{freq: f})
+	}
+	run(jobs)
+	// the probes come after, so that they never compete with the collections for tuners
+	jobs = nil
+	for _, f := range probes {
+		jobs = append(jobs, guideJob{freq: f, probe: true})
+	}
+	run(jobs)
 	if s := d.guideStore(); s != nil {
 		s.Flush()
 		ch, ev := s.Summary()
@@ -320,4 +355,47 @@ func (d *Device) learnUnplaced(ctx context.Context) {
 			log.Printf("guide: could not find where %s is on the air: %v", next, err)
 		}
 	}
+}
+
+// guideJob is one RF channel a pass listens to. A probe only finds out what an RF
+// channel carries, which takes a few seconds, and is not a guide collection.
+type guideJob struct {
+	freq  uint64
+	probe bool
+}
+
+// probeHold is how long a probe listens: enough for the multiplex's tables.
+const probeHold = 6 * time.Second
+
+// otherRFChannels lists the broadcast RF channels no channel of the lineup is placed
+// on. The devices' lineups give every station one place, so a station carried on a
+// second RF channel is only found by listening there; once its places are known the
+// Channels page can offer them and /auto/ can use them. The ones already known to
+// carry something (and not switched off) are returned as known, the rest as probes.
+func (d *Device) otherRFChannels(listed map[uint64]bool) (known, probes []uint64) {
+	if d.cfg.ChannelMap != "us-bcast" {
+		return nil, nil
+	}
+	chs, err := chanmap.Channels(d.cfg.ChannelMap)
+	if err != nil {
+		return nil, nil
+	}
+	carries := map[uint64]bool{}
+	for _, r := range d.rf.Snapshot() {
+		if len(r.Programs) > 0 {
+			carries[r.Frequency] = true
+		}
+	}
+	for _, c := range chs {
+		if c.Number > 36 || listed[c.Frequency] || d.hub.IsService(c.Frequency) {
+			continue
+		}
+		switch {
+		case !carries[c.Frequency]:
+			probes = append(probes, c.Frequency)
+		case !d.rfAllOff(c.Frequency):
+			known = append(known, c.Frequency)
+		}
+	}
+	return known, probes
 }

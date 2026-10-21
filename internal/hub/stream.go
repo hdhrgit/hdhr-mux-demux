@@ -20,6 +20,7 @@ import (
 
 	"hdhrmux/internal/chanmap"
 	"hdhrmux/internal/psip"
+	"hdhrmux/internal/rfmap"
 	"hdhrmux/internal/ts"
 	"hdhrmux/internal/upstream"
 )
@@ -241,6 +242,7 @@ func (st *stream) publishGuide(force bool) {
 		return
 	}
 	st.lastGuide = time.Now()
+	st.noteRFMux()
 	if st.collector.Changed() {
 		snap := st.collector.Snapshot()
 		vct := map[uint16]psip.Channel{}
@@ -250,6 +252,8 @@ func (st *stream) publishGuide(force bool) {
 		st.fmu.Lock()
 		st.vct = vct
 		st.fmu.Unlock()
+		snap.Frequency = st.spec.Frequency
+		st.noteRFGuide(snap)
 		st.h.publishGuide(snap)
 	}
 }
@@ -470,6 +474,7 @@ func (st *stream) pollStatus(lease *upstream.Lease) (upstream.Status, bool) {
 	}
 	st.Info() // keeps the bitrate sample fresh even if nobody asks
 	st.h.noteSEQ(lease.ID(), s)
+	st.noteRFSignal(lease.ID(), s)
 	st.smu.Lock()
 	st.status, st.statusAt = s, time.Now()
 	need := !strings.Contains(st.streamInfo, "tsid=") || time.Since(st.infoAt) > 5*time.Second
@@ -645,4 +650,66 @@ func (st *stream) freshStatus() {
 			st.smu.Unlock()
 		}
 	}
+}
+
+// noteRFMux tells the RF channel table which programmes this stream's multiplex
+// carries, with the PIDs of each and the channel numbers its own table gives them.
+func (st *stream) noteRFMux() {
+	rf := st.h.rf.Load()
+	if rf == nil {
+		return
+	}
+	st.smu.Lock()
+	mod := st.status.Lock
+	st.smu.Unlock()
+	if mod == "none" {
+		mod = ""
+	}
+	st.fmu.Lock()
+	tsid := st.tsid
+	progs := make([]rfmap.Prog, 0, len(st.programs))
+	for n, pmtPID := range st.programs {
+		p := rfmap.Prog{Number: n, PMTPID: pmtPID}
+		if pmt := st.pmts[n]; pmt != nil {
+			p.PIDs = pmt.PIDs()
+		}
+		if ch, ok := st.vct[n]; ok {
+			p.Channel, p.Name = ch.GuideName, ch.Name
+		}
+		progs = append(progs, p)
+	}
+	st.fmu.Unlock()
+	rf.NoteMux(st.spec.Frequency, mod, tsid, progs, time.Now())
+}
+
+// noteRFGuide tells the table how far ahead the multiplex's guide goes, per channel.
+func (st *stream) noteRFGuide(g psip.Guide) {
+	rf := st.h.rf.Load()
+	if rf == nil {
+		return
+	}
+	now := time.Now()
+	for _, ch := range g.Channels {
+		var until time.Time
+		n := 0
+		for _, e := range g.Events[ch.GuideName] {
+			if end := e.End(); end.After(now) {
+				n++
+				if end.After(until) {
+					until = end
+				}
+			}
+		}
+		rf.NoteGuide(st.spec.Frequency, ch.Program, ch.GuideName, ch.Name, n, until, now)
+	}
+}
+
+// noteRFSignal records how well the stream's multiplex is received through this device.
+func (st *stream) noteRFSignal(tuner string, s upstream.Status) {
+	rf := st.h.rf.Load()
+	if rf == nil || !s.Locked() || s.SEQ <= 0 {
+		return
+	}
+	device, _, _ := strings.Cut(tuner, "/")
+	rf.NoteSignal(st.spec.Frequency, device, s.SS, s.SNQ, s.SEQ, time.Now())
 }

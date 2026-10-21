@@ -1591,8 +1591,10 @@ func TestTunerListDefinesTheVirtualDevice(t *testing.T) {
 // Hidden: not discoverable by wildcard, still reachable by device ID or address.
 func TestNotDiscoverable(t *testing.T) {
 	e := setup(t, []int{1}, 1, func(c *vdev.Config) { c.Hidden = true })
-	if infos, _ := hdhrproto.Discover([]string{e.ctl}, 600*time.Millisecond); len(infos) != 0 {
-		t.Fatalf("a hidden multiplexer answered wildcard discovery: %+v", infos)
+	// (a request sent to its own address, as opposed to a broadcast, is answered: see
+	// the hdhrproto test for the broadcast)
+	if infos, _ := hdhrproto.Discover([]string{e.ctl}, 600*time.Millisecond); len(infos) != 1 {
+		t.Fatalf("a hidden multiplexer did not answer wildcard discovery sent to its address: %+v", infos)
 	}
 	req := &hdhrproto.Packet{Type: hdhrproto.TypeDiscoverReq}
 	req.AddU32(hdhrproto.TagDeviceType, hdhrproto.DeviceTypeTuner)
@@ -1608,6 +1610,24 @@ func TestNotDiscoverable(t *testing.T) {
 	}
 	if p, err := hdhrproto.Decode(buf[:n]); err != nil || p.Type != hdhrproto.TypeDiscoverRpy {
 		t.Fatalf("bad answer: %v %v", p, err)
+	}
+	// a client that connected over TCP knows where we are: wildcard discovery is answered there
+	wild := &hdhrproto.Packet{Type: hdhrproto.TypeDiscoverReq}
+	wild.AddU32(hdhrproto.TagDeviceType, hdhrproto.DeviceTypeWildcard)
+	wild.AddU32(hdhrproto.TagDeviceID, hdhrproto.DeviceIDWildcard)
+	tc, err := net.Dial("tcp", e.ctl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tc.Close()
+	tc.Write(wild.Encode())
+	tc.SetReadDeadline(time.Now().Add(time.Second))
+	n, err = tc.Read(buf)
+	if err != nil {
+		t.Fatalf("no answer to wildcard discovery over TCP: %v", err)
+	}
+	if p, err := hdhrproto.Decode(buf[:n]); err != nil || p.Type != hdhrproto.TypeDiscoverRpy {
+		t.Fatalf("bad TCP answer: %v %v", p, err)
 	}
 	ctl := hdhrproto.NewControl(e.ctl)
 	defer ctl.Close()
@@ -1868,11 +1888,13 @@ func TestUnlockedGuidePassYieldsToOutsiders(t *testing.T) {
 	raw := hdhrproto.NewControl(e.fakes[0].Addr())
 	defer raw.Close()
 
+	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		e.dev.GuidePass(context.Background())
+		e.dev.GuidePass(ctx)
 	}()
+	defer func() { cancel(); <-done }()
 	waitFor(t, "pass listening without a lock", 5*time.Second, func() bool {
 		tg, _ := raw.Get("/tuner0/target")
 		lk, _ := raw.Get("/tuner0/lockkey")
@@ -1889,11 +1911,15 @@ func TestUnlockedGuidePassYieldsToOutsiders(t *testing.T) {
 		t.Fatalf("an outsider could not take an unlocked tuner: %v %v", resp, err)
 	}
 	defer resp.Body.Close()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the pass did not give up the tuner")
-	}
+	// (the pass goes on to listen to other RF channels, so it is the stream that is watched)
+	waitFor(t, "the pass to give up the tuner", 5*time.Second, func() bool {
+		for _, s := range e.hub.Streams() {
+			if s.Background && s.Spec.Frequency == 473000000 {
+				return false
+			}
+		}
+		return true
+	})
 	if time.Since(began) > 4*time.Second {
 		t.Fatalf("the pass took %v to notice", time.Since(began))
 	}
@@ -3339,5 +3365,229 @@ func TestPlacementComesFromTheDevices(t *testing.T) {
 	m := find(tuned, "7.1")
 	if m == nil || m["Frequency"] != float64(177000000) || m["ProgramNumber"] != float64(1) || m["Modulation"] != "8vsb" || m["TransportStreamID"] != float64(1) {
 		t.Errorf("lineup.json?tuning for 7.1: %v", m)
+	}
+}
+
+// The Channels page shows every place a channel is received, with the signal there and
+// how far ahead its guide goes, learned from the guide pass that reads each multiplex.
+func TestChannelsPageShowsWhereChannelsAre(t *testing.T) {
+	testChannels = append(append([]fakehdhr.Channel{}, channels...),
+		fakehdhr.Channel{Frequency: 191000000, TSID: 9, Programs: []fakehdhr.Program{{Number: 5, VChannel: "7.1", Name: "ALPHA-2"}, {Number: 6, VChannel: "9.9", Name: "ZETA"}}})
+	defer func() { testChannels = nil }()
+	e := setup(t, []int{3}, 3, func(c *vdev.Config) { c.GuideHold = 2 * time.Second })
+	e.lu.Replace([]lineup.Entry{
+		{GuideNumber: "7.1", GuideName: "ALPHA", Frequency: 177000000, Program: 1},
+		{GuideNumber: "14.1", GuideName: "GAMMA", Frequency: 473000000, Program: 1},
+		{GuideNumber: "9.9", GuideName: "ZETA", Frequency: 191000000, Program: 6},
+	})
+	if _, _, err := e.dev.GuidePass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	type loc struct {
+		Frequency   uint64
+		Program     uint16
+		Name        string
+		Chosen      bool
+		Guide       bool
+		GuideHours  float64
+		GuideEvents int
+		Signal      *struct{ SS, SNQ, SEQ int }
+	}
+	var v struct {
+		Duplicates, Known int
+		Channels          []struct {
+			Number    string
+			Locations []loc
+		}
+	}
+	getJSON(t, e.api+"/ui/api/channels", &v)
+	if v.Known != 3 || v.Duplicates != 1 {
+		t.Errorf("known %d RF channels, %d duplicates; want 3 and 1", v.Known, v.Duplicates)
+	}
+	for _, c := range v.Channels {
+		switch c.Number {
+		case "7.1":
+			if len(c.Locations) != 2 || c.Locations[0].Frequency != 177000000 || c.Locations[1].Frequency != 191000000 {
+				t.Fatalf("7.1 places: %+v", c.Locations)
+			}
+			if !c.Locations[0].Chosen || c.Locations[1].Chosen {
+				t.Errorf("only the lineup's place is chosen: %+v", c.Locations)
+			}
+			for _, l := range c.Locations {
+				if !l.Guide || l.GuideEvents == 0 || l.GuideHours <= 0 || l.Name == "" || l.Signal == nil || l.Signal.SS == 0 {
+					t.Errorf("7.1 at %d Hz is missing what the pass read: %+v", l.Frequency, l)
+				}
+			}
+			if c.Locations[1].Name != "ALPHA-2" || c.Locations[1].Program != 5 {
+				t.Errorf("the other place has the name and program the multiplex gives it: %+v", c.Locations[1])
+			}
+		case "14.1":
+			if len(c.Locations) != 1 {
+				t.Errorf("14.1 should be in one place: %+v", c.Locations)
+			}
+		}
+	}
+}
+
+// What a person chooses on the Channels page decides where /auto/ tunes a channel that
+// is received on two RF channels, and which RF channel's guide is served for it.
+func TestChannelChoicesDecideWhereAutoTunesAndWhichGuide(t *testing.T) {
+	testChannels = append(append([]fakehdhr.Channel{}, channels...),
+		fakehdhr.Channel{Frequency: 191000000, TSID: 9, Programs: []fakehdhr.Program{{Number: 5, VChannel: "7.1", Name: "ALPHA-2"}, {Number: 6, VChannel: "9.9", Name: "ZETA"}}})
+	defer func() { testChannels = nil }()
+	e := setup(t, []int{4}, 4, func(c *vdev.Config) { c.GuideHold = 2 * time.Second })
+	e.lu.Replace([]lineup.Entry{
+		{GuideNumber: "7.1", GuideName: "ALPHA", Frequency: 177000000, Program: 1},
+		{GuideNumber: "9.9", GuideName: "ZETA", Frequency: 191000000, Program: 6},
+	})
+	if _, _, err := e.dev.GuidePass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	put := func(number, body string) (int, string) {
+		req, _ := http.NewRequest("PUT", e.api+"/ui/api/channels/"+number, strings.NewReader(body))
+		req.Header.Set("X-Requested-With", "hdhr-mux-ui")
+		req.Header.Set("Content-Type", "application/json")
+		r, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Body.Close()
+		b, _ := io.ReadAll(r.Body)
+		return r.StatusCode, string(b)
+	}
+	programWatched := func() uint16 { // which programme /auto/v7.1 delivers: 1 (at 177 MHz) or 5 (at 191 MHz)
+		c, rc := e.open("/auto/v7.1")
+		if c == nil {
+			t.Fatalf("/auto/v7.1 refused: %d %v", rc.StatusCode, rc.Header)
+		}
+		defer c.close()
+		an := analyze(t, c.read(t, 188*60))
+		for p := range an.esProgs {
+			return p
+		}
+		t.Fatal("no programme")
+		return 0
+	}
+	if p := programWatched(); p != 1 {
+		t.Fatalf("by default the lineup's place (177 MHz, programme 1): got %d", p)
+	}
+	// first choice: the other place
+	if code, body := put("7.1", `{"video":191000000}`); code != 200 {
+		t.Fatalf("PUT: %d %s", code, body)
+	}
+	waitFor(t, "the first choice is used", 3*time.Second, func() bool { return programWatched() == 5 })
+	// switched off: the other place is used even when it is not the first choice
+	put("7.1", `{"off":[191000000]}`)
+	waitFor(t, "a switched-off place is not used", 3*time.Second, func() bool { return programWatched() == 1 })
+
+	// the guide: automatic, then a chosen place
+	titles := func() string {
+		var out []map[string]any
+		getJSON(t, e.api+"/epg.json", &out)
+		for _, c := range out {
+			if c["GuideNumber"] == "7.1" {
+				if evs, _ := c["Events"].([]any); len(evs) > 0 {
+					return fmt.Sprint(evs[0].(map[string]any)["Title"])
+				}
+			}
+		}
+		return ""
+	}
+	put("7.1", `{}`)
+	auto := titles()
+	put("7.1", `{"guide":191000000}`)
+	chosen191 := titles()
+	put("7.1", `{"guide":177000000}`)
+	chosen177 := titles()
+	if chosen191 == "" || chosen177 == "" || chosen191 == chosen177 || (auto != chosen191 && auto != chosen177) {
+		t.Errorf("guide titles: automatic %q, 191 MHz %q, 177 MHz %q", auto, chosen191, chosen177)
+	}
+
+	// switched off everywhere: unavailable, and left out of the lineup
+	put("7.1", `{"off":[177000000,191000000]}`)
+	if _, rc := e.open("/auto/v7.1"); rc.StatusCode != 404 {
+		t.Errorf("a channel switched off everywhere should be unknown: %d", rc.StatusCode)
+	}
+	var lu []map[string]any
+	getJSON(t, e.api+"/lineup.json", &lu)
+	for _, m := range lu {
+		if m["GuideNumber"] == "7.1" {
+			t.Error("7.1 is still in the lineup")
+		}
+	}
+	// and what is not allowed
+	if code, _ := put("7.1", `{"off":[999000000]}`); code != 400 {
+		t.Errorf("an RF channel the channel is not received on was accepted: %d", code)
+	}
+	if code, _ := put("7.1", `{"off":[177000000],"video":177000000}`); code != 400 {
+		t.Errorf("a first choice that is switched off was accepted: %d", code)
+	}
+	if code, _ := put("1.1", `{}`); code != 404 {
+		t.Errorf("an unknown channel: %d", code)
+	}
+	req, _ := http.NewRequest("PUT", e.api+"/ui/api/channels/7.1", strings.NewReader(`{}`))
+	if r, err := http.DefaultClient.Do(req); err != nil || r.StatusCode != 403 {
+		t.Errorf("a PUT without the admin header: %v %v", err, r)
+	}
+}
+
+// The devices' lineups place every station once. A station carried on another RF
+// channel is found because a guide pass also listens to the RF channels the lineup
+// does not mention.
+func TestGuidePassFindsStationsOnOtherRFChannels(t *testing.T) {
+	testChannels = append(append([]fakehdhr.Channel{}, channels...),
+		fakehdhr.Channel{Frequency: 183000000, TSID: 9, Programs: []fakehdhr.Program{{Number: 5, VChannel: "7.1", Name: "ALPHA-3"}}})
+	defer func() { testChannels = nil }()
+	e := setup(t, []int{3}, 3, func(c *vdev.Config) { c.GuideHold = 2 * time.Second })
+	e.lu.Replace([]lineup.Entry{{GuideNumber: "7.1", GuideName: "ALPHA", Frequency: 177000000, Program: 1}})
+	if _, _, err := e.dev.GuidePass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var v struct {
+		Channels []struct {
+			Number    string
+			Locations []struct {
+				Frequency uint64
+				Name      string
+			}
+		}
+	}
+	getJSON(t, e.api+"/ui/api/channels", &v)
+	for _, c := range v.Channels {
+		if c.Number != "7.1" {
+			continue
+		}
+		if len(c.Locations) != 2 || c.Locations[0].Frequency != 177000000 || c.Locations[1].Frequency != 183000000 || c.Locations[1].Name != "ALPHA-3" {
+			t.Fatalf("7.1 places: %+v", c.Locations)
+		}
+		return
+	}
+	t.Fatal("7.1 is not on the Channels page")
+}
+
+// What another application is watching is read from the device: the program it
+// selected on the tuner, named with the channel number the station gives it.
+func TestActivityShowsWhatOtherApplicationsWatch(t *testing.T) {
+	e := setup(t, []int{4}, 4, nil)
+	e.lu.Replace(testLineup)
+	foreign, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/tuner2/ch473000000-3", e.fakes[0].StreamPort()))
+	if err != nil || foreign.StatusCode != 200 {
+		t.Fatalf("foreign client: %v %v", foreign, err)
+	}
+	defer foreign.Body.Close()
+	type watching struct{ Channel, Name string }
+	var a struct {
+		Tuners []struct {
+			State    string
+			Watching []watching
+		}
+	}
+	waitFor(t, "the channel the other application watches", 8*time.Second, func() bool {
+		a.Tuners = nil
+		getJSON(t, e.api+"/ui/api/activity", &a)
+		return len(a.Tuners) == 4 && len(a.Tuners[2].Watching) == 1
+	})
+	if w := a.Tuners[2].Watching[0]; w.Channel != "14.3" || w.Name == "" {
+		t.Errorf("watching %+v, want 14.3 and its name", w)
 	}
 }

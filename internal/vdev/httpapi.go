@@ -370,6 +370,33 @@ type streamReq struct {
 	program  uint16
 	vchannel string
 	service  bool // ATSC 3.0: the device delivers one service per tuner
+	// places are the RF channels the channel may be tuned on, best first (see
+	// placesOf); spec, program and service are those of the first.
+	places []place
+}
+
+// variants is the request once for each place it may be tuned on.
+func (rq streamReq) variants() []streamReq {
+	if len(rq.places) == 0 {
+		return []streamReq{rq}
+	}
+	out := make([]streamReq, 0, len(rq.places))
+	for _, pl := range rq.places {
+		q := rq
+		q.spec = chanmap.Spec{Modulation: "auto", Frequency: pl.freq}
+		q.program, q.service, q.places = pl.program, pl.service, nil
+		out = append(out, q)
+	}
+	return out
+}
+
+func (rq streamReq) hasPlace(freq uint64) bool {
+	for _, pl := range rq.places {
+		if pl.freq == freq {
+			return true
+		}
+	}
+	return false
 }
 
 // resolve returns the lineup entry for a guide number, learning where the
@@ -402,8 +429,13 @@ func (d *Device) parseChannelPath(ctx context.Context, s string) (streamReq, err
 		if err != nil {
 			return rq, err
 		}
-		rq.spec = chanmap.Spec{Modulation: "auto", Frequency: e.Frequency}
-		rq.program, rq.vchannel, rq.service = e.Program, e.GuideNumber, e.Modulation == "atsc3"
+		places := d.placesOf(e)
+		if len(places) == 0 {
+			return rq, fmt.Errorf("%w %q: it is switched off on every RF channel it is received on", errUnknownChannel, e.GuideNumber)
+		}
+		rq.places = places
+		rq.spec = chanmap.Spec{Modulation: "auto", Frequency: places[0].freq}
+		rq.program, rq.vchannel, rq.service = places[0].program, e.GuideNumber, places[0].service
 		return rq, nil
 	case reChNum.MatchString(s):
 		m := reChNum.FindStringSubmatch(s)
@@ -450,12 +482,15 @@ func httpErr(w http.ResponseWriter, code int, hdhr string) {
 // further, because the point of multiplexing is to keep tuners free: it first
 // reuses any tuner already carrying the stream, and only then opens a new one.
 func (d *Device) openStream(ctx context.Context, which string, rq streamReq) (*VTuner, *hub.Sub, error) {
-	start := func(v *VTuner) (*VTuner, *hub.Sub, error) {
-		sub, err := v.startHTTP(ctx, rq.spec, rq.program, rq.vchannel, rq.service, which == "auto")
-		return v, sub, err
+	startAt := func(q streamReq) func(*VTuner) (*VTuner, *hub.Sub, error) {
+		return func(v *VTuner) (*VTuner, *hub.Sub, error) {
+			sub, err := v.startHTTP(ctx, q.spec, q.program, q.vchannel, q.service, which == "auto")
+			return v, sub, err
+		}
 	}
+	start := startAt(rq)
 	if which == "auto" {
-		return d.openAuto(ctx, rq, start)
+		return d.openAuto(ctx, rq, startAt)
 	}
 	if !strings.HasPrefix(which, "tuner") {
 		return nil, nil, errNotFound
@@ -473,9 +508,37 @@ func (d *Device) openStream(ctx context.Context, which string, rq streamReq) (*V
 	return nil, nil, ErrBusy
 }
 
-func (d *Device) openAuto(ctx context.Context, rq streamReq, start func(*VTuner) (*VTuner, *hub.Sub, error)) (*VTuner, *hub.Sub, error) {
-	// 1. Reuse: a tuner already carrying this stream (busy ones first, then
-	// ones only lingering on it) costs no additional tuner at all.
+// openAuto serves an /auto/ request. A channel can be received on more than one RF
+// channel (rq.places: the ones that are switched on, best first). A session that
+// already carries it at any of them is reused before a new tuner is opened, and a
+// new one is tried at each place in turn until the channel tunes.
+func (d *Device) openAuto(ctx context.Context, rq streamReq, startAt func(streamReq) func(*VTuner) (*VTuner, *hub.Sub, error)) (*VTuner, *hub.Sub, error) {
+	variants := rq.variants()
+	for _, q := range variants {
+		if v, sub, ok := d.joinAuto(ctx, q, startAt(q)); ok {
+			return v, sub, nil
+		}
+	}
+	if v, sub, ok := d.joinOtherPlace(ctx, rq); ok {
+		return v, sub, nil
+	}
+	var lastErr error = errBusyAll
+	for _, q := range variants {
+		v, sub, err := d.newAuto(ctx, q, startAt(q))
+		if err == nil {
+			return v, sub, nil
+		}
+		lastErr = err
+		if errors.Is(err, errBusyAll) {
+			break // no tuner is free, and the next place needs one too
+		}
+	}
+	return nil, nil, lastErr
+}
+
+// joinAuto reuses a tuner already carrying this stream (busy ones first, then ones
+// only lingering on it): that costs no additional tuner at all.
+func (d *Device) joinAuto(ctx context.Context, rq streamReq, start func(*VTuner) (*VTuner, *hub.Sub, error)) (*VTuner, *hub.Sub, bool) {
 	carriers := d.hub.Carrying(rq.spec, d.tuners[0].opts(rq.program, rq.service))
 	for _, idle := range []bool{false, true} {
 		for _, c := range carriers {
@@ -486,31 +549,39 @@ func (d *Device) openAuto(ctx context.Context, rq streamReq, start func(*VTuner)
 			if idle {
 				if v.tryReserve() {
 					if v2, sub, err := start(v); err == nil {
-						return v2, sub, nil
+						return v2, sub, true
 					}
 				}
 			} else if sub, err := v.joinHTTP(ctx, rq.spec, rq.program, rq.service, false); err == nil {
-				return v, sub, nil
+				return v, sub, true
 			}
 		}
 	}
+	return nil, nil, false
+}
 
-	// 1b. The station may be received elsewhere than the lineup says (another
-	// antenna or feed): a session that already carries it is as good.
+// joinOtherPlace rides a session that carries the channel on an RF channel that the
+// lineup and the RF channel table do not list (and that has not been switched off):
+// the station may be received elsewhere than anyone has recorded.
+func (d *Device) joinOtherPlace(ctx context.Context, rq streamReq) (*VTuner, *hub.Sub, bool) {
 	if d.lv().AutoJoinOtherLocations && rq.vchannel != "" && !rq.service {
+		pref := d.prefs.Get(rq.vchannel)
 		for _, c := range d.hub.CarryingChannel(rq.vchannel) {
-			if c.Spec.Frequency == rq.spec.Frequency || c.Tuner >= len(d.tuners) {
-				continue // the lineup's own place was tried above
+			if c.Tuner >= len(d.tuners) || pref.IsOff(c.Spec.Frequency) || rq.hasPlace(c.Spec.Frequency) {
+				continue
 			}
 			if sub, err := d.tuners[c.Tuner].joinHTTP(ctx, c.Spec, c.Program, false, false); err == nil {
-				return d.tuners[c.Tuner], sub, nil
+				return d.tuners[c.Tuner], sub, true
 			}
 		}
 	}
+	return nil, nil, false
+}
 
-	// 2. Nothing to reuse: open a new tuner, choosing the one that does the
-	// least harm to what may be asked later (ATSC 1.0 stays off the ATSC 3.0
-	// tuners, tuners used by other applications or still lingering come last).
+// newAuto opens a new tuner for the stream when there is nothing to reuse: the one
+// that does the least harm to what may be asked later (ATSC 1.0 stays off the ATSC
+// 3.0 tuners, tuners used by other applications or still lingering come last).
+func (d *Device) newAuto(ctx context.Context, rq streamReq, start func(*VTuner) (*VTuner, *hub.Sub, error)) (*VTuner, *hub.Sub, error) {
 	pool := d.hub.Pool()
 	idle := d.hub.IdleTuners()
 	type cand struct {

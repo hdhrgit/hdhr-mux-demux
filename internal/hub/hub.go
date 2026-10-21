@@ -14,6 +14,7 @@ import (
 	"hdhrmux/internal/chanmap"
 	"hdhrmux/internal/lineup"
 	"hdhrmux/internal/psip"
+	"hdhrmux/internal/rfmap"
 	"hdhrmux/internal/ts"
 	"hdhrmux/internal/upstream"
 )
@@ -46,7 +47,8 @@ type Hub struct {
 	// linger and clientBuf can change while running (the settings page).
 	linger    atomic.Int64 // time.Duration
 	clientBuf atomic.Int64
-	settle    atomic.Int64 // time.Duration; see SetSignalSettle
+	settle    atomic.Int64                // time.Duration; see SetSignalSettle
+	rf        atomic.Pointer[rfmap.Store] // what is learned about each RF channel (see SetRFStore)
 	seqMu     sync.Mutex
 	lastSEQ   map[string]int // the last non-zero symbol quality seen on each physical tuner
 }
@@ -913,3 +915,8 @@ func (h *Hub) lastSEQOf(id string) int {
 	}
 	return 100
 }
+
+// SetRFStore gives the hub the table it keeps up to date with what its streams
+// learn about each RF channel: the programmes and channel numbers a multiplex
+// carries, how much guide it has for each, and how well it is received.
+func (h *Hub) SetRFStore(s *rfmap.Store) { h.rf.Store(s) }

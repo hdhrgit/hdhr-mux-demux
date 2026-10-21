@@ -142,6 +142,14 @@ function viewerHTML(v, nowSec) {
       <span class="buf">buffer <span class="meter ${queue > 60 ? 'bad' : queue > 25 ? 'warn' : ''}"><i style="width:${queue}%"></i></span> ${queue}%</span>
       ${v.drops ? `<span class="drops">${v.drops} dropped</span>` : ''}</div></div>`;
 }
+function otherHTML(o, holder, nowSec) {
+  const raw = !/^\d/.test(o.channel);
+  return `<div class="viewer">
+    <div class="v-top"><span class="chan ${raw ? 'raw' : ''}">${esc(o.channel)}</span><span class="v-name">${esc(o.name || '')}</span>
+      <span class="v-client mono">${esc(holder || 'another application')}</span></div>
+    ${o.now ? programme(o.now, nowSec) : ''}
+    ${o.next ? `<div class="times"><span>Next</span><span>${o.next.placeholder ? 'to be announced' : esc(o.next.title)} · ${clock(o.next.start)}</span></div>` : ''}</div>`;
+}
 function tunerHTML(t, nowSec) {
   const sig = t.signal || { strength: 0, quality: 0, symbol: 0 };
   const state = { watching: 'Watching', other: 'Other app', idle: 'Idle' }[t.state];
@@ -152,6 +160,7 @@ function tunerHTML(t, nowSec) {
     <div class="signals">${meter('Signal', sig.strength)}${meter('Quality', sig.quality)}${meter('Symbols', sig.symbol)}
       <div>${spark(history.get(t.index) || [])}<div class="rate"><b>${(t.rxBps / 1e6).toFixed(1)}</b> Mbps in</div></div></div>
     ${t.state === 'other' ? `<div class="other-note">In use by another application${t.holder ? `: <span class="mono">${esc(t.holder)}</span>${t.holderLocal ? ' (this machine)' : ''}` : ''}${t.transport ? ` · receiving over ${esc(t.transport)}` : ''}.<br>The multiplexer leaves it alone.${t.holderLocal ? ' A program on this machine looks just like the multiplexer to the device, since both use this address.' : ''}</div>` : ''}
+    ${t.state === 'other' && t.watching && t.watching.length ? `<div class="viewers">${t.watching.map((o) => otherHTML(o, t.holder, nowSec)).join('')}</div>` : ''}
     ${t.viewers.length ? `<div class="viewers">${t.viewers.map((v) => viewerHTML(v, nowSec)).join('')}</div>` : ''}</div>`;
 }
 function statCard(label, value, unit, sub, extra = '', cls = '') {
@@ -221,6 +230,7 @@ function renderActivity(root) {
 
 /* ---------- lineup page ---------- */
 const lineup = { data: [], q: '', filter: 'all', loaded: false };
+const chans = { q: '', filter: 'dup', data: null }; // the channels page
 function lineupRows() {
   const q = lineup.q.trim().toLowerCase(), nowSec = Date.now() / 1000;
   return lineup.data.filter((c) => {
@@ -232,7 +242,7 @@ function lineupRows() {
   }).map((c) => {
     const p = c.now, done = p ? pct((nowSec - p.start) / Math.max(1, p.end - p.start) * 100) : 0;
     return `<tr data-url="${esc(c.url)}"><td class="c-num"><span class="chan">${esc(c.number)}</span></td>
-      <td><b>${esc(c.name)}</b>${c.hd ? '<span class="tag">HD</span>' : ''}${c.modulation === 'atsc3' ? '<span class="tag">3.0</span>' : ''}${c.watching ? `<span class="tag live">${c.watching} watching</span>` : ''}</td>
+      <td><b class="nm">${esc(c.name)}</b>${c.hd ? '<span class="tag">HD</span>' : ''}${c.modulation === 'atsc3' ? '<span class="tag">3.0</span>' : ''}${c.watching ? `<span class="tag live">${c.watching} watching</span>` : ''}</td>
       <td class="prog">${p ? `<div class="title">${p.placeholder ? '<i style="color:var(--muted);font-weight:450">To be announced</i>' : esc(p.title)}</div><div class="progress"><i style="width:${done}%"></i></div><small>${clock(p.start)} – ${clock(p.end)}</small>` : '<small>no guide data</small>'}</td>
       <td class="prog c-next">${c.next ? `<div class="title">${c.next.placeholder ? '<i style="color:var(--muted);font-weight:450">To be announced</i>' : esc(c.next.title)}</div><small>${clock(c.next.start)}</small>` : ''}</td>
       <td class="c-rf">${mhz(c.frequency)}${c.codec ? `<br><small>${esc(c.codec)}</small>` : ''}</td>
@@ -386,14 +396,124 @@ async function restartNow() {
   $('#save-msg').textContent = 'It has not come back after 90 seconds. Check its log (docker logs, journalctl -u hdhr-mux).';
 }
 
+/* ---------- channels page: where each channel is on the air, and the choices ---------- */
+function guideCell(l) {
+  if (!l.guide) return '<span class="muted" title="This RF channel has not been read yet">not read yet</span>';
+  if (!l.guideEvents) return '<span class="bad-text" title="This RF channel sends no EPG for the channel">none</span>';
+  return `<b>${l.guideHours >= 10 ? Math.round(l.guideHours) : l.guideHours.toFixed(1)}</b> h`;
+}
+function signalCell(l) {
+  const s = l.signal;
+  if (!s) return '<span class="muted" title="Not measured yet">–</span>';
+  const age = Math.max(0, Math.round(Date.now() / 1000 - s.at));
+  return `<span title="Measured through device ${esc(s.device)} ${dur(age)} ago: signal strength, signal quality, symbol quality">` +
+    `<b class="${level(s.ss)}">${s.ss}</b> / <b class="${level(s.snq)}">${s.snq}</b> / <b class="${level(s.seq)}">${s.seq}</b></span>`;
+}
+function chanControls(c, l, ed, single) {
+  const dis = ed ? '' : 'disabled';
+  const id = (k) => `${k}-${c.number}-${l.frequency}`;
+  const allow = `<td class="c-ctl"><input type="checkbox" id="${id('a')}" data-act="allow" data-freq="${l.frequency}" ${l.off ? '' : 'checked'} ${dis} aria-label="Use ${mhz(l.frequency)} for video"></td>`;
+  if (single) return allow;
+  return allow +
+    `<td class="c-ctl"><input type="radio" name="first-${esc(c.number)}" data-act="first" data-freq="${l.frequency}" ${l.first ? 'checked' : ''} ${l.off ? 'disabled' : dis} aria-label="Try ${mhz(l.frequency)} first"></td>` +
+    `<td class="c-ctl"><input type="radio" name="guide-${esc(c.number)}" data-act="guide" data-freq="${l.frequency}" ${l.used ? 'checked' : ''} ${dis} aria-label="Take the EPG from ${mhz(l.frequency)}"></td>`;
+}
+function locationRows(c, ed) {
+  return c.locations.map((l) => `<tr class="${l.chosen ? 'chosen' : ''} ${l.off ? 'off' : ''}">
+    <td class="mono">${mhz(l.frequency)}</td>
+    <td>${esc(l.name || c.name)}${l.chosen ? ' <span class="tag" title="Where the devices\' lineups put this channel">lineup</span>' : ''}</td>
+    <td class="mono">${l.program}${l.modulation === 'atsc3' ? ' <span class="tag">3.0</span>' : ''}</td>
+    <td>${signalCell(l)}</td><td>${guideCell(l)}</td>${chanControls(c, l, ed, false)}</tr>`).join('');
+}
+function channelNotes(c, ed) {
+  const used = c.locations.find((l) => l.used);
+  const first = c.locations.find((l) => l.first);
+  const bits = [];
+  bits.push(`Video: tried first on <b>${first ? mhz(first.frequency) : 'nothing'}</b>${c.video ? ' (your choice) ' + (ed ? '<button type="button" class="link" data-act="reset-first">use the lineup\'s place</button>' : '') : ''}; the others are used when the first cannot be tuned or is already open.`);
+  bits.push(`EPG: ${c.guide ? `from <b>${mhz(c.guide)}</b> (your choice) ` + (ed ? '<button type="button" class="link" data-act="reset-guide">use automatic</button>' : '') : `automatic${used ? ` (<b>${mhz(used.frequency)}</b>, the one that goes furthest ahead)` : ': there is no EPG for this channel yet'}`}.`);
+  return `<p class="chan-notes">${bits.join('<br>')}</p>`;
+}
+function channelCard(c, ed) {
+  const multi = c.locations.length > 1;
+  return `<div class="card chan-card ${multi ? 'multi' : ''} ${c.unavailable ? 'unavail' : ''}" data-num="${esc(c.number)}"><div class="chan-head"><span class="chan">${esc(c.number)}</span><b>${esc(c.name)}</b>
+    ${multi ? `<span class="tag" title="This channel is received on more than one RF channel">${c.locations.length} RF channels</span>` : ''}${c.hd ? ' <span class="tag">HD</span>' : ''}${c.drm ? ' <span class="tag" title="Encrypted">DRM</span>' : ''}</div>
+    ${c.unavailable ? '<div class="banner warn inline" role="status"><b>Switched off everywhere</b><p>This channel is left out of the lineup and the playlist until one of its RF channels is switched on again.</p></div>' : ''}
+    ${c.locations.length ? `<table class="loc-table"><thead><tr><th>RF channel</th><th>Name there</th><th>Program</th><th>Signal <small>strength / quality / symbols</small></th><th>EPG ahead</th><th class="c-ctl" title="May be used for video">Video</th><th class="c-ctl" title="Tried first for video">First</th><th class="c-ctl" title="The programme guide (EPG) is taken from here">EPG</th></tr></thead><tbody>${locationRows(c, ed)}</tbody></table>${multi ? channelNotes(c, ed) : ''}`
+      : '<p class="muted pad">Not located yet: the multiplexer finds out the first time it tunes this channel.</p>'}</div>`;
+}
+function compactTable(list, ed) {
+  return `<div class="card table-card"><table class="loc-table single"><thead><tr><th>Ch</th><th>Channel</th><th>RF channel</th><th>Signal <small>strength / quality / symbols</small></th><th>EPG ahead</th><th class="c-ctl" title="May be used for video">On</th></tr></thead><tbody>` +
+    list.map((c) => { const l = c.locations[0]; return l ? `<tr class="${l.off ? 'off' : ''}" data-num="${esc(c.number)}"><td><span class="chan">${esc(c.number)}</span></td><td>${esc(c.name)}${c.hd ? ' <span class="tag">HD</span>' : ''}</td><td class="mono">${mhz(l.frequency)}</td><td>${signalCell(l)}</td><td>${guideCell(l)}</td>${chanControls(c, l, ed, true)}</tr>` : `<tr><td><span class="chan">${esc(c.number)}</span></td><td>${esc(c.name)}</td><td colspan="4" class="muted">not located yet</td></tr>`; }).join('') + '</tbody></table></div>';
+}
+function updateChannels() {
+  const d = chans.data; if (!d) return;
+  const ed = d.editable;
+  const q = chans.q.trim().toLowerCase();
+  let list = d.channels;
+  if (chans.filter === 'dup') list = list.filter((c) => c.locations.length > 1);
+  if (q) list = list.filter((c) => (c.number + ' ' + c.name + ' ' + c.locations.map((l) => l.name + ' ' + mhz(l.frequency)).join(' ')).toLowerCase().includes(q));
+  $('#chan-count').textContent = `${d.channels.length} channels, ${d.duplicates} on more than one RF channel, ${d.known} RF channel${d.known === 1 ? '' : 's'} read so far`;
+  const hint = !d.known ? '<div class="banner" role="status"><b>Still learning</b><p>This table fills in as the multiplexer tunes channels and collects the EPG (a pass runs about an hour apart; the first one starts a minute or two after start-up).</p></div>' : '';
+  const ro = !ed ? '<div class="banner" role="status"><b>Read only</b><p>Choices can only be changed from the local network, and not while settings are locked.</p></div>' : '';
+  const multi = list.filter((c) => c.locations.length > 1), single = list.filter((c) => c.locations.length <= 1);
+  patch($('#chan-list'), ro + hint + (list.length ? multi.map((c) => channelCard(c, ed)).join('') +
+    (single.length ? (multi.length ? '<div class="section-title">In one place</div>' : '') + compactTable(single, ed) : '') :
+    `<div class="card empty"><h3>${chans.filter === 'dup' && !q ? 'No channel is on more than one RF channel (yet)' : 'Nothing matches'}</h3>${chans.filter === 'dup' && !q ? 'Channels that are carried on two RF channels show up here once the multiplexer has read both. Choose "All channels" to see where every channel is.' : ''}</div>`));
+}
+async function saveChannel(number, body) {
+  const r = await fetch('/ui/api/channels/' + encodeURIComponent(number), { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'hdhr-mux-ui' }, body: JSON.stringify(body) });
+  if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || 'saving failed (' + r.status + ')'); }
+}
+function renderChannels(root) {
+  root.innerHTML = `<div class="page-title"><h1>Channels</h1><p id="chan-count">–</p></div>
+    <div class="toolbar"><label class="search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <input id="cq" type="search" placeholder="Search channels, names and RF channels" aria-label="Search" autocomplete="off"></label>
+      <div class="filters" role="group" aria-label="Filter">${[['dup', 'On several RF channels'], ['all', 'All channels']].map(([k, n]) => `<button type="button" data-f="${k}" aria-pressed="${chans.filter === k}">${n}</button>`).join('')}</div></div>
+    <div id="chan-msg" class="chan-msg" role="status" hidden></div><div id="chan-list"><div class="skeleton"></div></div>`;
+  const q = $('#cq'); q.value = chans.q;
+  q.addEventListener('input', () => { chans.q = q.value; updateChannels(); });
+  $$('.filters button', root).forEach((b) => b.addEventListener('click', () => {
+    chans.filter = b.dataset.f; $$('.filters button', root).forEach((x) => x.setAttribute('aria-pressed', String(x === b))); updateChannels();
+  }));
+  const load = async () => {
+    clearTimeout(timer);
+    if (stopped) return;
+    try { chans.data = await getJSON('/ui/api/channels'); setConn(true); updateChannels(); } catch (e) { setConn(false); }
+    if (!stopped) timer = setTimeout(load, 8000);
+  };
+  const act = async (e) => {
+    const el = e.target.closest('[data-act]'); if (!el) return;
+    if (el.tagName === 'BUTTON' && e.type !== 'click') return;
+    if (el.tagName !== 'BUTTON' && e.type !== 'change') return;
+    const row = el.closest('[data-num]'); if (!row) return;
+    const c = chans.data.channels.find((x) => x.number === row.dataset.num); if (!c) return;
+    const freq = Number(el.dataset.freq || 0);
+    let off = c.locations.filter((l) => l.off).map((l) => l.frequency), video = c.video || 0, guide = c.guide || 0;
+    switch (el.dataset.act) {
+      case 'allow': if (el.checked) off = off.filter((f) => f !== freq); else { if (!off.includes(freq)) off.push(freq); if (video === freq) video = 0; } break;
+      case 'first': video = freq; off = off.filter((f) => f !== freq); break;
+      case 'guide': guide = freq; break;
+      case 'reset-first': video = 0; break;
+      case 'reset-guide': guide = 0; break;
+      default: return;
+    }
+    const msg = $('#chan-msg');
+    try { await saveChannel(c.number, { off, video, guide }); msg.hidden = true; } catch (err) { msg.textContent = c.number + ': ' + err.message; msg.hidden = false; }
+    clearTimeout(timer); load();
+  };
+  $('#chan-list').addEventListener('change', act);
+  $('#chan-list').addEventListener('click', act);
+  load();
+}
+
 /* ---------- router ---------- */
-const PAGES = { activity: renderActivity, lineup: renderLineup, settings: renderSettings };
+const PAGES = { activity: renderActivity, lineup: renderLineup, channels: renderChannels, settings: renderSettings };
 function route() {
   stopped = true; clearTimeout(timer);
   const name = (location.hash.replace(/^#\/?/, '') || 'activity').split('/')[0];
   const page = PAGES[name] ? name : 'activity';
   $$('.tabs a').forEach((a) => { if (a.dataset.tab === page) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
-  document.title = `${{ activity: 'Activity', lineup: 'Lineup', settings: 'Settings' }[page]} · ${$('.brand-text b').textContent}`;
+  document.title = `${{ activity: 'Activity', lineup: 'Lineup', channels: 'Channels', settings: 'Settings' }[page]} · ${$('.brand-text b').textContent}`;
   stopped = false;
   PAGES[page]($('#app'));
 }
@@ -403,3 +523,4 @@ applyTheme();
 setupThemeMenu();
 route();
 })();
+
