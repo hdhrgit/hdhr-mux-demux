@@ -1,6 +1,7 @@
 package vdev
 
 import (
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,6 +26,7 @@ type Live struct {
 	GuideUnlocked          bool
 	IdleRelease            time.Duration
 	LogRequests            bool
+	LogOn                  string // normalised log_requests_on: ",web,udp,", or "" for all
 }
 
 func liveOf(c *Config) Live {
@@ -33,7 +35,7 @@ func liveOf(c *Config) Live {
 		StreamTTL: c.StreamTTL, ScanMode: c.ScanMode, ScanTuners: c.ScanTuners,
 		LineupRefresh: c.LineupRefresh, GuideRefresh: c.GuideRefresh, GuideHold: c.GuideHold,
 		GuideParallel: c.GuideParallel, GuideUnlocked: c.GuideUnlocked, IdleRelease: c.IdleRelease,
-		LogRequests: c.LogRequests,
+		LogRequests: c.LogRequests, LogOn: normaliseLogOn(c.LogRequestsOn),
 	}
 }
 
@@ -44,7 +46,7 @@ func liveFromConfig(c *config.Config) Live {
 		StreamTTL: *c.StreamTTL, ScanMode: c.Lineup.ScanMode, ScanTuners: c.Lineup.ScanTuners,
 		LineupRefresh: time.Duration(c.Lineup.Refresh), GuideRefresh: time.Duration(c.Guide.Refresh),
 		GuideHold: time.Duration(c.Guide.Hold), GuideParallel: c.Guide.Parallel, GuideUnlocked: c.Guide.Unlocked,
-		IdleRelease: time.Duration(c.IdleRelease), LogRequests: c.LogRequests,
+		IdleRelease: time.Duration(c.IdleRelease), LogRequests: c.LogRequests, LogOn: normaliseLogOn(c.LogRequestsOn),
 	}
 }
 
@@ -85,4 +87,25 @@ func (d *Device) ApplyConfig(c *config.Config) {
 	d.hub.SetSignalSettle(time.Duration(c.SignalSettle))
 	d.lineup.SetHideATSC3(!*c.Lineup.ATSC3)
 	d.Reconfigure(liveFromConfig(c))
+}
+
+// normaliseLogOn turns "Web, UDP" into ",web,udp," (only the four known names are kept).
+func normaliseLogOn(s string) string {
+	var keep []string
+	for _, f := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return r == ',' || r == ' ' || r == ';' }) {
+		switch f {
+		case "web", "udp", "tcp", "stream":
+			keep = append(keep, f)
+		}
+	}
+	if len(keep) == 0 {
+		return ""
+	}
+	return "," + strings.Join(keep, ",") + ","
+}
+
+// logging says whether a request that arrived on kind (web, udp, tcp, stream) is logged.
+func (d *Device) logging(kind string) bool {
+	l := d.lv()
+	return l.LogRequests && (l.LogOn == "" || strings.Contains(l.LogOn, ","+kind+","))
 }

@@ -125,6 +125,8 @@ type Config struct {
 	// LogRequests logs every discovery, control and HTTP request received,
 	// for finding out what a client asks for.
 	LogRequests bool
+	// LogRequestsOn limits it to requests received on these (web, udp, tcp, stream; empty = all).
+	LogRequestsOn string
 
 	// IdleRelease frees a tuned tuner nobody is using after this long.
 	IdleRelease time.Duration
@@ -299,7 +301,11 @@ func (d *Device) Start() error {
 	{
 		inner := h
 		h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if d.lv().LogRequests {
+			kind := "web"
+			if la, ok := r.Context().Value(http.LocalAddrContextKey).(*net.TCPAddr); ok && d.streamLn != nil && la.Port == d.StreamPort() {
+				kind = "stream"
+			}
+			if d.logging(kind) {
 				log.Printf("req: http %s %s %s (ua=%q)", r.RemoteAddr, r.Method, r.URL.RequestURI(), r.UserAgent())
 			}
 			inner.ServeHTTP(w, r)
@@ -313,8 +319,8 @@ func (d *Device) Start() error {
 		d.wg.Add(1)
 		go func() { defer d.wg.Done(); d.httpSrv.Serve(d.streamLn) }()
 	}
-	go func() { defer d.wg.Done(); hdhrproto.ServeTCP(d.tcpLn, d) }()
-	go func() { defer d.wg.Done(); hdhrproto.ServeUDP(d.udpConn, d) }()
+	go func() { defer d.wg.Done(); hdhrproto.ServeTCP(d.tcpLn, ctlHandler{d, "tcp"}) }()
+	go func() { defer d.wg.Done(); hdhrproto.ServeUDP(d.udpConn, ctlHandler{d, "udp"}) }()
 	d.wg.Add(1)
 	go d.reaper()
 	d.wg.Add(1)
@@ -436,18 +442,37 @@ func localFor(remote net.IP) string {
 // ---- hdhrproto.Handler -------------------------------------------------
 
 func (d *Device) Discover(remote net.IP, devType, devID uint32) *hdhrproto.Packet {
-	return d.discover(remote, devType, devID, false)
+	return d.discover(remote, devType, devID, false, "udp")
 }
 
 // DiscoverDirect answers a discovery request that came over a TCP connection the
 // client made to this address itself: being hidden only keeps the multiplexer out
 // of broadcast discovery.
 func (d *Device) DiscoverDirect(remote net.IP, devType, devID uint32) *hdhrproto.Packet {
-	return d.discover(remote, devType, devID, true)
+	return d.discover(remote, devType, devID, true, "udp")
 }
 
-func (d *Device) discover(remote net.IP, devType, devID uint32, direct bool) *hdhrproto.Packet {
-	if d.lv().LogRequests {
+// ctlHandler is the control protocol handler for one transport (udp or tcp), so that
+// the log can tell them apart.
+type ctlHandler struct {
+	d     *Device
+	proto string
+}
+
+func (h ctlHandler) Discover(remote net.IP, devType, devID uint32) *hdhrproto.Packet {
+	return h.d.discover(remote, devType, devID, false, h.proto)
+}
+
+func (h ctlHandler) DiscoverDirect(remote net.IP, devType, devID uint32) *hdhrproto.Packet {
+	return h.d.discover(remote, devType, devID, true, h.proto)
+}
+
+func (h ctlHandler) GetSet(remote net.IP, name string, value *string, lockkey *uint32) (string, error) {
+	return h.d.getSet(h.proto, remote, name, value, lockkey)
+}
+
+func (d *Device) discover(remote net.IP, devType, devID uint32, direct bool, proto string) *hdhrproto.Packet {
+	if d.logging(proto) {
 		log.Printf("req: discover from %v type=%08X id=%08X", remote, devType, devID)
 	}
 	if devType != hdhrproto.DeviceTypeWildcard && devType != hdhrproto.DeviceTypeTuner {
@@ -459,7 +484,7 @@ func (d *Device) discover(remote net.IP, devType, devID uint32, direct bool) *hd
 	if d.cfg.Hidden && (!direct || d.cfg.Setup != "") && devID == hdhrproto.DeviceIDWildcard { // in setup mode: nothing to offer, even to those who ask
 		return nil // not discoverable: only answer those who ask for us by ID
 	}
-	if d.cfg.Hidden && direct && devID == hdhrproto.DeviceIDWildcard && d.lv().LogRequests {
+	if d.cfg.Hidden && direct && devID == hdhrproto.DeviceIDWildcard && d.logging(proto) {
 		log.Printf("req: discover from %v answered although not discoverable: it was addressed to us", remote)
 	}
 	base := d.baseURL(localFor(remote))
@@ -475,7 +500,11 @@ func (d *Device) discover(remote net.IP, devType, devID uint32, direct bool) *hd
 const unknownVar = "ERROR: unknown getset variable"
 
 func (d *Device) GetSet(remote net.IP, name string, value *string, lockkey *uint32) (string, error) {
-	if d.lv().LogRequests {
+	return d.getSet("udp", remote, name, value, lockkey)
+}
+
+func (d *Device) getSet(proto string, remote net.IP, name string, value *string, lockkey *uint32) (string, error) {
+	if d.logging(proto) {
 		if value != nil {
 			log.Printf("req: control %v set %s %q", remote, name, *value)
 		} else {
