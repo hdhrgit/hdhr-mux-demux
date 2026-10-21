@@ -3629,6 +3629,9 @@ func TestRequestLogCanBeLimitedByPort(t *testing.T) {
 	}
 	if strings.Contains(out, "/auto/v7.1") {
 		t.Error("a stream-port request was logged although only web and tcp were asked for")
+	}
+}
+
 // A client flips a channel between enabled, favourite and disabled the way it does on a
 // device (lineup.post?favorite=): only this lineup changes, and the web page does the same.
 func TestChannelStatesFlipLikeOnADevice(t *testing.T) {
