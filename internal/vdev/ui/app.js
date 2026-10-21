@@ -229,6 +229,7 @@ function renderActivity(root) {
 }
 
 /* ---------- lineup page ---------- */
+const chans = { q: '', data: null }; // the channels page
 const lineup = { data: [], q: '', filter: 'all', loaded: false, editable: false };
 const STAR = 'M12 2.5l2.9 5.9 6.5.9-4.7 4.6 1.1 6.5L12 17.4 6.2 20.4l1.1-6.5L2.6 9.3l6.5-.9z';
 const CROSS = 'M5 5l14 14M19 5L5 19';
@@ -239,7 +240,6 @@ function starButton(c, ed) {
   const icon = s === 'disabled' ? `<path d="${CROSS}" stroke="var(--bad)" stroke-width="2.4" stroke-linecap="round" fill="none"/>` : `<path d="${STAR}" stroke="var(--muted)" stroke-width="1.6" stroke-linejoin="round" fill="${s === 'favorite' ? 'var(--accent)' : 'none'}"/>`;
   return `<button type="button" class="star ${s}" data-star="${s}" ${ed ? '' : 'disabled'} title="${esc(ed ? label : 'Changing this is only possible from the local network')}" aria-label="${esc(label)}"><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">${icon}</svg></button>`;
 }
-const chans = { q: '', filter: 'dup', data: null }; // the channels page
 function lineupRows() {
   const q = lineup.q.trim().toLowerCase(), nowSec = Date.now() / 1000;
   return lineup.data.filter((c) => {
@@ -430,11 +430,10 @@ function signalCell(l) {
   return `<span title="Measured through device ${esc(s.device)} ${dur(age)} ago: signal strength, signal quality, symbol quality">` +
     `<b class="${level(s.ss)}">${s.ss}</b> / <b class="${level(s.snq)}">${s.snq}</b> / <b class="${level(s.seq)}">${s.seq}</b></span>`;
 }
-function chanControls(c, l, ed, single) {
+function chanControls(c, l, ed) {
   const dis = ed ? '' : 'disabled';
   const id = (k) => `${k}-${c.number}-${l.frequency}`;
   const allow = `<td class="c-ctl"><input type="checkbox" id="${id('a')}" data-act="allow" data-freq="${l.frequency}" ${l.off ? '' : 'checked'} ${dis} aria-label="Use ${mhz(l.frequency)} for video"></td>`;
-  if (single) return allow;
   return allow +
     `<td class="c-ctl"><input type="radio" name="first-${esc(c.number)}" data-act="first" data-freq="${l.frequency}" ${l.first ? 'checked' : ''} ${l.off ? 'disabled' : dis} aria-label="Try ${mhz(l.frequency)} first"></td>` +
     `<td class="c-ctl"><input type="radio" name="guide-${esc(c.number)}" data-act="guide" data-freq="${l.frequency}" ${l.used ? 'checked' : ''} ${dis} aria-label="Take the EPG from ${mhz(l.frequency)}"></td>`;
@@ -444,7 +443,7 @@ function locationRows(c, ed) {
     <td class="mono">${mhz(l.frequency)}</td>
     <td>${esc(l.name || c.name)}${l.chosen ? ' <span class="tag" title="Where the devices\' lineups put this channel">lineup</span>' : ''}</td>
     <td class="mono">${l.program}${l.modulation === 'atsc3' ? ' <span class="tag">3.0</span>' : ''}</td>
-    <td>${signalCell(l)}</td><td>${guideCell(l)}</td>${chanControls(c, l, ed, false)}</tr>`).join('');
+    <td>${signalCell(l)}</td><td>${guideCell(l)}</td>${chanControls(c, l, ed)}</tr>`).join('');
 }
 function channelNotes(c, ed) {
   const used = c.locations.find((l) => l.used);
@@ -456,46 +455,34 @@ function channelNotes(c, ed) {
 }
 function channelCard(c, ed) {
   const multi = c.locations.length > 1;
-  return `<div class="card chan-card ${multi ? 'multi' : ''} ${c.unavailable ? 'unavail' : ''}" data-num="${esc(c.number)}"><div class="chan-head"><span class="chan">${esc(c.number)}</span><b>${esc(c.name)}</b>
+  return `<div class="card chan-card ${multi ? 'multi' : ''}" data-num="${esc(c.number)}"><div class="chan-head"><span class="chan">${esc(c.number)}</span><b>${esc(c.name)}</b>
     ${multi ? `<span class="tag" title="This channel is received on more than one RF channel">${c.locations.length} RF channels</span>` : ''}${c.hd ? ' <span class="tag">HD</span>' : ''}${c.drm ? ' <span class="tag" title="Encrypted">DRM</span>' : ''}</div>
-    ${c.unavailable ? '<div class="banner warn inline" role="status"><b>Switched off everywhere</b><p>This channel is left out of the lineup and the playlist until one of its RF channels is switched on again.</p></div>' : ''}
     ${c.locations.length ? `<table class="loc-table"><thead><tr><th>RF channel</th><th>Name there</th><th>Program</th><th>Signal <small>strength / quality / symbols</small></th><th>EPG ahead</th><th class="c-ctl" title="May be used for video">Video</th><th class="c-ctl" title="Tried first for video">First</th><th class="c-ctl" title="The programme guide (EPG) is taken from here">EPG</th></tr></thead><tbody>${locationRows(c, ed)}</tbody></table>${multi ? channelNotes(c, ed) : ''}`
       : '<p class="muted pad">Not located yet: the multiplexer finds out the first time it tunes this channel.</p>'}</div>`;
-}
-function compactTable(list, ed) {
-  return `<div class="card table-card"><table class="loc-table single"><thead><tr><th>Ch</th><th>Channel</th><th>RF channel</th><th>Signal <small>strength / quality / symbols</small></th><th>EPG ahead</th><th class="c-ctl" title="May be used for video">On</th></tr></thead><tbody>` +
-    list.map((c) => { const l = c.locations[0]; return l ? `<tr class="${l.off ? 'off' : ''}" data-num="${esc(c.number)}"><td><span class="chan">${esc(c.number)}</span></td><td>${esc(c.name)}${c.hd ? ' <span class="tag">HD</span>' : ''}</td><td class="mono">${mhz(l.frequency)}</td><td>${signalCell(l)}</td><td>${guideCell(l)}</td>${chanControls(c, l, ed, true)}</tr>` : `<tr><td><span class="chan">${esc(c.number)}</span></td><td>${esc(c.name)}</td><td colspan="4" class="muted">not located yet</td></tr>`; }).join('') + '</tbody></table></div>';
 }
 function updateChannels() {
   const d = chans.data; if (!d) return;
   const ed = d.editable;
   const q = chans.q.trim().toLowerCase();
-  let list = d.channels;
-  if (chans.filter === 'dup') list = list.filter((c) => c.locations.length > 1);
+  let list = d.channels.filter((c) => c.locations.length > 1);
   if (q) list = list.filter((c) => (c.number + ' ' + c.name + ' ' + c.locations.map((l) => l.name + ' ' + mhz(l.frequency)).join(' ')).toLowerCase().includes(q));
-  $('#chan-count').textContent = `${d.channels.length} channels, ${d.duplicates} on more than one RF channel, ${d.known} RF channel${d.known === 1 ? '' : 's'} read so far`;
+  $('#chan-count').textContent = `${d.duplicates} channel${d.duplicates === 1 ? '' : 's'} on multiple RF channels, ${d.known} RF channel${d.known === 1 ? '' : 's'} read so far`;
   const hint = !d.known ? '<div class="banner" role="status"><b>Still learning</b><p>This table fills in as the multiplexer tunes channels and collects the EPG (a pass runs about an hour apart; the first one starts a minute or two after start-up).</p></div>' : '';
   const ro = !ed ? '<div class="banner" role="status"><b>Read only</b><p>Choices can only be changed from the local network, and not while settings are locked.</p></div>' : '';
-  const multi = list.filter((c) => c.locations.length > 1), single = list.filter((c) => c.locations.length <= 1);
-  patch($('#chan-list'), ro + hint + (list.length ? multi.map((c) => channelCard(c, ed)).join('') +
-    (single.length ? (multi.length ? '<div class="section-title">In one place</div>' : '') + compactTable(single, ed) : '') :
-    `<div class="card empty"><h3>${chans.filter === 'dup' && !q ? 'No channel is on more than one RF channel (yet)' : 'Nothing matches'}</h3>${chans.filter === 'dup' && !q ? 'Channels that are carried on two RF channels show up here once the multiplexer has read both. Choose "All channels" to see where every channel is.' : ''}</div>`));
+  patch($('#chan-list'), ro + hint + (list.length ? list.map((c) => channelCard(c, ed)).join('') :
+    `<div class="card empty"><h3>${q ? 'Nothing matches' : 'No channel is on more than one RF channel (yet)'}</h3>${q ? 'Try a different search.' : 'Channels that are carried on two RF channels show up here once the multiplexer has read both. Whether a channel is on or off is decided in the Lineup.'}</div>`));
 }
 async function saveChannel(number, body) {
   const r = await fetch('/ui/api/channels/' + encodeURIComponent(number), { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'hdhr-mux-ui' }, body: JSON.stringify(body) });
   if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || 'saving failed (' + r.status + ')'); }
 }
 function renderChannels(root) {
-  root.innerHTML = `<div class="page-title"><h1>Channels</h1><p id="chan-count">–</p></div>
+  root.innerHTML = `<div class="page-title"><h1>Advanced</h1><p id="chan-count">–</p></div>
     <div class="toolbar"><label class="search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
-      <input id="cq" type="search" placeholder="Search channels, names and RF channels" aria-label="Search" autocomplete="off"></label>
-      <div class="filters" role="group" aria-label="Filter">${[['dup', 'On multiple RF channels'], ['all', 'All channels']].map(([k, n]) => `<button type="button" data-f="${k}" aria-pressed="${chans.filter === k}">${n}</button>`).join('')}</div></div>
+      <input id="cq" type="search" placeholder="Search channels, names and RF channels" aria-label="Search" autocomplete="off"></label></div>
     <div id="chan-msg" class="chan-msg" role="status" hidden></div><div id="chan-list"><div class="skeleton"></div></div>`;
   const q = $('#cq'); q.value = chans.q;
   q.addEventListener('input', () => { chans.q = q.value; updateChannels(); });
-  $$('.filters button', root).forEach((b) => b.addEventListener('click', () => {
-    chans.filter = b.dataset.f; $$('.filters button', root).forEach((x) => x.setAttribute('aria-pressed', String(x === b))); updateChannels();
-  }));
   const load = async () => {
     clearTimeout(timer);
     if (stopped) return;
@@ -528,13 +515,14 @@ function renderChannels(root) {
 }
 
 /* ---------- router ---------- */
-const PAGES = { activity: renderActivity, lineup: renderLineup, channels: renderChannels, settings: renderSettings };
+const PAGES = { activity: renderActivity, lineup: renderLineup, advanced: renderChannels, settings: renderSettings };
 function route() {
   stopped = true; clearTimeout(timer);
-  const name = (location.hash.replace(/^#\/?/, '') || 'activity').split('/')[0];
+  let name = (location.hash.replace(/^#\/?/, '') || 'activity').split('/')[0];
+  if (name === 'channels') name = 'advanced'; // its old name
   const page = PAGES[name] ? name : 'activity';
   $$('.tabs a').forEach((a) => { if (a.dataset.tab === page) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
-  document.title = `${{ activity: 'Activity', lineup: 'Lineup', channels: 'Channels', settings: 'Settings' }[page]} · ${$('.brand-text b').textContent}`;
+  document.title = `${{ activity: 'Activity', lineup: 'Lineup', advanced: 'Advanced', settings: 'Settings' }[page]} · ${$('.brand-text b').textContent}`;
   stopped = false;
   PAGES[page]($('#app'));
 }

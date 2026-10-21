@@ -184,7 +184,7 @@ titles and times, descriptions). The multiplexer reads it from the streams it al
 * **From a pass over the idle multiplexes.** After start-up (90 s) and then every
   `guide.refresh` (default 1 h, 0 turns it off) it listens to each ATSC 1.0 multiplex in the lineup for
   `guide.hold` (45 s), `guide.parallel` (3) at a time, on spare tuners. A pass never keeps a
-  tuner from a viewer: it gives it up at once. It also listens for a few seconds to the other broadcast RF channels (see the Channels tab). `POST /epg/refresh` starts one now.
+  tuner from a viewer: it gives it up at once. It also listens for a few seconds to the other broadcast RF channels (see the Advanced tab). `POST /epg/refresh` starts one now.
   On a new installation no channel's place on the air is known yet (the lineup comes from the devices
   and has no frequencies), so the first pass begins by finding out: it looks for one channel of each
   multiplex by name, which teaches every channel on that multiplex, about one tuning per multiplex and
@@ -429,13 +429,13 @@ are embedded in the binary.
   flips a channel between enabled, favourite and disabled (as on a device); it changes this
   multiplexer's copy only, and a client doing the same (`lineup.post?favorite=+7.1`, `-7.1`, `x7.1`) has the same effect.
   Disabled channels are left out of the lineup, playlist and guide and are not tuned.
-* **Channels** – where each channel is received. Most are on one RF channel; some stations are carried
+* **Advanced** – the channels that are received on more than one RF channel. Most are on one RF channel; some stations are carried
   on two or more (2.1 to 2.4 and 4.1 are on 545 and 575 MHz in the author's market, 20.1 on 515 and 581,
   24.1 on 473 and 533). The page lists those first, with a row for every place: the name the multiplex
   gives the channel there, its program number, how well it is received (signal strength, quality and
   symbol quality, with the device that measured it) and how many hours ahead the guide on that RF
   channel goes (or "none": 533 MHz sends no guide at all). The place the devices' lineups use is marked.
-  "All channels" shows every channel. It is learned from the streams and guide passes that tune the
+  It is learned from the streams and guide passes that tune the
   channels anyway and kept in `<state_dir>/rfmap.json`. The devices' lineups give every station one
   place, so each guide pass also listens for a few seconds to the broadcast RF channels 2-36 that no
   lineup channel is placed on (`us-bcast` only), which is how a station on a second RF channel is found;
@@ -443,9 +443,8 @@ are embedded in the binary.
   after a new start, and a new transmitter shows up within `guide.refresh`.
   The page is also where the choices are made (saved in `<state_dir>/channels.json`; they apply at once,
   and need the same permission as the settings page):
-  * **Video** (a checkbox per RF channel): where `/auto/` may tune the channel. Several can be on. A
-    channel switched off at every place is unavailable: it is left out of the lineup, the playlist and
-    the guide, and its RF channel is not tuned for the guide when no other channel needs it.
+  * **Video** (a checkbox per RF channel): where `/auto/` may tune the channel. Several can be on, but not none: whether a channel
+    exists at all is decided in the Lineup (the star column). An RF channel that every channel on it has switched off is not tuned for the guide.
   * **First**: the place tried first. A request first rides a session that is already open at any allowed
     place, then tunes the first choice, then the others, one after the other until one works. Without a
     choice the place from the devices' lineups is first. Other places are used only when
