@@ -146,7 +146,7 @@ function otherHTML(o, holder, nowSec) {
   const raw = !/^\d/.test(o.channel);
   return `<div class="viewer">
     <div class="v-top"><span class="chan ${raw ? 'raw' : ''}">${esc(o.channel)}</span><span class="v-name">${esc(o.name || '')}</span>
-      <span class="v-client mono">${esc(holder || 'another application')}${o.inferred ? ' · worked out from the PIDs it takes' : ''}</span></div>
+      <span class="v-client mono">${esc(holder || 'another application')}</span></div>
     ${o.now ? programme(o.now, nowSec) : ''}
     ${o.next ? `<div class="times"><span>Next</span><span>${o.next.placeholder ? 'to be announced' : esc(o.next.title)} · ${clock(o.next.start)}</span></div>` : ''}</div>`;
 }
