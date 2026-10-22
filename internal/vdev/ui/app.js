@@ -334,7 +334,7 @@ function fieldHTML(f, st) {
 }
 function readControl(el, f) {
   if (f.type === 'bool') return el.checked;
-  if (f.type === 'list') return el.value.split('\\n').map((x) => x.trim()).filter(Boolean);
+  if (f.type === 'list') return el.value.split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean);
   return el.value.trim();
 }
 function sameValue(a, b) { return JSON.stringify(a) === JSON.stringify(b); }

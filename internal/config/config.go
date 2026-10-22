@@ -175,15 +175,7 @@ type Lineup struct {
 //	                             DEVICEID/N-M); replaces upstream.tuners
 //	HDHOMERUN_DISCOVERABLE       "false": do not let clients discover the multiplexer
 func applyEnv(c *Config) {
-	split := func(v string) []string {
-		var out []string
-		for _, s := range strings.Split(v, ",") {
-			if s = strings.TrimSpace(s); s != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	}
+	split := SplitList
 	if v := os.Getenv("HDHOMERUN_DEVICES"); v != "" {
 		c.Upstream.Devices = append(c.Upstream.Devices, split(v)...)
 	}

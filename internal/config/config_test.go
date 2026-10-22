@@ -307,3 +307,19 @@ func TestNotDiscoverableUntilChosen(t *testing.T) {
 		t.Errorf("environment variable: %v default=%v", *c.Discoverable, c.DiscoverableDefault)
 	}
 }
+
+func TestSplitListAcceptsLinesCommasAndSpaces(t *testing.T) {
+	got := SplitList("10.0.0.1, 10.0.0.2 10.0.0.3\n10.0.0.4;\t10.0.0.5,,  ")
+	want := []string{"10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4", "10.0.0.5"}
+	if len(got) != len(want) {
+		t.Fatalf("got %q", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %q", got)
+		}
+	}
+	if len(SplitList("  \n ")) != 0 {
+		t.Error("blank input should give no entries")
+	}
+}
