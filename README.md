@@ -452,6 +452,12 @@ are embedded in the binary.
   * **EPG**: which RF channel the guide comes from. Without a choice it is the one that goes furthest
     ahead. Guides of different RF channels are never merged.
   Each choice has a "use the lineup's place" / "use automatic" link to undo it.
+  **Merged channels** (same tab, saved in `<state_dir>/merges.json`): groups of channels you say carry
+  the same programme (11.1 and 11.3, say). For the tuners they are one: a request for any of them
+  is served by a stream that already carries any of them, so fewer tuners are used; with none open it
+  tunes the requested channel at its own place first, then the places of the others. Which of them are
+  listed is the Lineup's business: you can disable all but one and requests for it still ride the others.
+  Nothing is merged on its own, and the multiplexer does not check that they really are the same.
 * **Appearance** (the half-moon button) – System / Light / Dark, and a choice of theme for each:
   Paper, Mist, Mint, Lilac (light) and Slate, Midnight, Dusk, Ember (dark). None of them is pure white
   or pure black. *System* follows the device and switches between your light and dark theme by

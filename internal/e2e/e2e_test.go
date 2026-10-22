@@ -3587,44 +3587,80 @@ func TestActivityShowsWhatOtherApplicationsWatch(t *testing.T) {
 	}
 }
 
-type lockedBuf struct {
-	mu sync.Mutex
-	b  strings.Builder
-}
-
-func (l *lockedBuf) Write(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.b.Write(p)
-}
-func (l *lockedBuf) String() string { l.mu.Lock(); defer l.mu.Unlock(); return l.b.String() }
-
-// "Log every request" can be limited to what arrives on some of the ports.
-func TestRequestLogCanBeLimitedByPort(t *testing.T) {
-	var buf lockedBuf
-	log.SetOutput(&buf)
-	defer log.SetOutput(os.Stderr)
-	e := setup(t, []int{1}, 1, func(c *vdev.Config) { c.LogRequests, c.LogRequestsOn = true, "web, tcp" })
-	getJSON(t, e.api+"/discover.json", &map[string]any{})     // web
-	hdhrproto.Discover([]string{e.ctl}, 300*time.Millisecond) // udp
-	ctl := hdhrproto.NewControl(e.ctl)                        // tcp
-	ctl.Get("/sys/model")
-	ctl.Close()
-	if r, err := http.Get(e.http + "/auto/v7.1"); err == nil { // stream port
-		r.Body.Close()
-	}
-	out := buf.String()
-	for _, want := range []string{"req: http ", "/discover.json", "req: control "} {
-		if !strings.Contains(out, want) {
-			t.Errorf("log lacks %q", want)
+// Channels merged into a group are one for the tuners: a request for any of them rides a
+// stream that carries any of them, and with nothing open it tunes where the requested one is.
+func TestMergedChannelsShareTheTuner(t *testing.T) {
+	testChannels = append(append([]fakehdhr.Channel{}, channels...),
+		fakehdhr.Channel{Frequency: 191000000, TSID: 9, Programs: []fakehdhr.Program{{Number: 6, VChannel: "9.9", Name: "ZETA"}}})
+	defer func() { testChannels = nil }()
+	e := setup(t, []int{4}, 4, nil)
+	e.lu.Replace([]lineup.Entry{
+		{GuideNumber: "7.1", GuideName: "ALPHA", Frequency: 177000000, Program: 1},
+		{GuideNumber: "9.9", GuideName: "ZETA", Frequency: 191000000, Program: 6},
+	})
+	tuned := func() int {
+		n := 0
+		for _, c := range e.fakes[0].TunedChannels() {
+			if c != "none" {
+				n++
+			}
 		}
+		return n
 	}
-	if strings.Contains(out, "req: discover") {
-		t.Error("a udp request was logged although only web and tcp were asked for")
+	// not merged: two channels, two tuners
+	a, ra := e.open("/auto/v9.9")
+	if ra.StatusCode != 200 {
+		t.Fatalf("9.9: %d", ra.StatusCode)
 	}
-	if strings.Contains(out, "/auto/v7.1") {
-		t.Error("a stream-port request was logged although only web and tcp were asked for")
+	b, rb := e.open("/auto/v7.1")
+	if rb.StatusCode != 200 {
+		t.Fatalf("7.1: %d", rb.StatusCode)
 	}
+	if n := tuned(); n != 2 {
+		t.Fatalf("unmerged channels used %d tuners, want 2", n)
+	}
+	a.cancel()
+	b.cancel()
+	waitFor(t, "the tuners to be released", 5*time.Second, func() bool { return tuned() == 0 })
+
+	put := func(body string) int {
+		req, _ := http.NewRequest("PUT", e.api+"/ui/api/merges", strings.NewReader(body))
+		req.Header.Set("X-Requested-With", "hdhr-mux-ui")
+		r, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		return r.StatusCode
+	}
+	if c := put(`{"groups":[["7.1","9.9"]]}`); c != 200 {
+		t.Fatalf("PUT merges: %d", c)
+	}
+	if put(`{"groups":[["7.1","1.1"]]}`) != 400 || put(`{"groups":[["7.1","9.9"],["9.9","7.1"]]}`) != 400 {
+		t.Error("an unknown channel, or a channel in two groups, should be refused")
+	}
+	var got struct {
+		Groups [][]struct{ Number string }
+	}
+	getJSON(t, e.api+"/ui/api/merges", &got)
+	if len(got.Groups) != 1 || len(got.Groups[0]) != 2 {
+		t.Fatalf("groups %+v", got.Groups)
+	}
+
+	// merged: whichever is asked for rides the stream that is open
+	a, ra = e.open("/auto/v9.9")
+	if ra.StatusCode != 200 {
+		t.Fatalf("9.9: %d", ra.StatusCode)
+	}
+	b, rb = e.open("/auto/v7.1")
+	if rb.StatusCode != 200 {
+		t.Fatalf("7.1: %d", rb.StatusCode)
+	}
+	if n := tuned(); n != 1 {
+		t.Errorf("merged channels used %d tuners, want 1", n)
+	}
+	a.cancel()
+	b.cancel()
 }
 
 // A client flips a channel between enabled, favourite and disabled the way it does on a
@@ -3708,5 +3744,45 @@ func TestChannelStatesFlipLikeOnADevice(t *testing.T) {
 	}
 	if !ui.Editable || !found {
 		t.Errorf("the page lists a disabled channel (editable %v, found %v)", ui.Editable, found)
+	}
+}
+
+type lockedBuf struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedBuf) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+func (l *lockedBuf) String() string { l.mu.Lock(); defer l.mu.Unlock(); return l.b.String() }
+
+// "Log every request" can be limited to what arrives on some of the ports.
+func TestRequestLogCanBeLimitedByPort(t *testing.T) {
+	var buf lockedBuf
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	e := setup(t, []int{1}, 1, func(c *vdev.Config) { c.LogRequests, c.LogRequestsOn = true, "web, tcp" })
+	getJSON(t, e.api+"/discover.json", &map[string]any{})     // web
+	hdhrproto.Discover([]string{e.ctl}, 300*time.Millisecond) // udp
+	ctl := hdhrproto.NewControl(e.ctl)                        // tcp
+	ctl.Get("/sys/model")
+	ctl.Close()
+	if r, err := http.Get(e.http + "/auto/v7.1"); err == nil { // stream port
+		r.Body.Close()
+	}
+	out := buf.String()
+	for _, want := range []string{"req: http ", "/discover.json", "req: control "} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log lacks %q", want)
+		}
+	}
+	if strings.Contains(out, "req: discover") {
+		t.Error("a udp request was logged although only web and tcp were asked for")
+	}
+	if strings.Contains(out, "/auto/v7.1") {
+		t.Error("a stream-port request was logged although only web and tcp were asked for")
 	}
 }

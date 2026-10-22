@@ -335,3 +335,12 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .star:disabled { cursor: default; }
 .lineup tr.off td:not(.c-fav) { opacity: .5; }
 .lineup tr.off .nm { text-decoration: line-through; }
+.merge-help { margin: 0 0 12px; }
+.merge-group, .merge-new { padding: 12px 14px; margin-bottom: 10px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.mchip { display: inline-flex; align-items: center; gap: 6px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; padding: 4px 6px 4px 10px; }
+.mchip.off { opacity: .65; }
+.mchip .x { background: transparent; border: 0; color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer; border-radius: 6px; padding: 2px 6px; }
+.mchip .x:hover { background: var(--border); color: var(--text); }
+.merge-add { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.minput { flex: 1 1 180px; min-width: 0; background: var(--bg-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font: inherit; }

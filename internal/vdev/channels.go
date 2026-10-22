@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -33,6 +34,27 @@ type place struct {
 // a channel exists at all is decided in the Lineup, not here). An ATSC 3.0 service is
 // only ever at its own place.
 func (d *Device) placesOf(e lineup.Entry) []place {
+	ps := d.ownPlaces(e)
+	// channels merged with this one carry the same thing: their places are as good
+	for _, n := range d.merges.GroupOf(e.GuideNumber) {
+		if n == e.GuideNumber {
+			continue
+		}
+		m, ok := d.entryAny(n) // a merged channel that is not listed still counts
+		if !ok {
+			continue
+		}
+		for _, p := range d.ownPlaces(m) {
+			if !slices.Contains(ps, p) {
+				ps = append(ps, p)
+			}
+		}
+	}
+	return ps
+}
+
+// ownPlaces is placesOf without the merged channels.
+func (d *Device) ownPlaces(e lineup.Entry) []place {
 	if ps := d.placesWith(e, true); len(ps) > 0 {
 		return ps
 	}
@@ -344,4 +366,14 @@ func (d *Device) rfAllOff(freq uint64) bool {
 		}
 	}
 	return n > 0
+}
+
+// entryAny finds a channel of the lineup whether or not it is switched on there.
+func (d *Device) entryAny(number string) (lineup.Entry, bool) {
+	for _, e := range d.lineup.Entries(true) {
+		if e.GuideNumber == number {
+			return e, true
+		}
+	}
+	return lineup.Entry{}, false
 }
