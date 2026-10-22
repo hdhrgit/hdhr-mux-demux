@@ -282,13 +282,38 @@ func New(cfg Config, h *hub.Hub, lu *lineup.Lineup) (*Device, error) {
 func (d *Device) Start() error {
 	var err error
 	d.httpLn, err = net.Listen("tcp", d.cfg.HTTPAddr)
-	if err != nil && d.cfg.HTTPFallback != "" && (errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EADDRINUSE)) {
-		why := "is not allowed for this user (run as root, or give the program CAP_NET_BIND_SERVICE)"
+	portProblem := func(err error) bool { return errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EADDRINUSE) }
+	whyNot := func(err error) string {
 		if errors.Is(err, syscall.EADDRINUSE) {
-			why = "is in use by another program"
+			return "is in use by another program"
 		}
+		return "is not allowed for this user (run as root, or give the program CAP_NET_BIND_SERVICE)"
+	}
+	first := d.cfg.HTTPAddr
+	firstErr := err
+	if err != nil && d.cfg.HTTPFallback != "" && portProblem(err) {
+		why := whyNot(err)
 		log.Printf("web port %s %s: using %s instead. Clients that add this multiplexer by address need that port; discovery announces it. Set http_listen (or -http) to choose.", d.cfg.HTTPAddr, why, d.cfg.HTTPFallback)
 		d.httpLn, err = net.Listen("tcp", d.cfg.HTTPFallback)
+	}
+	// Last resort: any free port. The settings page is the way to choose a port, so it has to
+	// be reachable somewhere; the log and the pages say where and why.
+	if err != nil && portProblem(err) {
+		tried := first
+		if d.cfg.HTTPFallback != "" {
+			tried += " and " + d.cfg.HTTPFallback
+		}
+		host, _, _ := net.SplitHostPort(first)
+		if ln, lerr := net.Listen("tcp", net.JoinHostPort(host, "0")); lerr == nil {
+			d.httpLn, err = ln, nil
+			port := ln.Addr().(*net.TCPAddr).Port
+			msg := fmt.Sprintf("The web port %s %s, so the web interface is on port %d instead (this changes whenever the multiplexer starts). Open http://<this machine>:%d/ui/, choose another Web / API address under Settings, Network, and restart.", tried, whyNot(firstErr), port, port)
+			log.Print(msg)
+			if d.cfg.Notice != "" {
+				msg += " " + d.cfg.Notice
+			}
+			d.cfg.Notice = msg
+		}
 	}
 	if err != nil {
 		return fmt.Errorf("http listen: %w", err)

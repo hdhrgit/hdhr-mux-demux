@@ -3786,3 +3786,34 @@ func TestRequestLogCanBeLimitedByPort(t *testing.T) {
 		t.Error("a stream-port request was logged although only web and tcp were asked for")
 	}
 }
+
+// When neither the web port nor its fallback can be used, the web interface still comes
+// up, on any free port, and says so: it is where the port is changed.
+func TestWebPortLastResort(t *testing.T) {
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer busy.Close()
+	busy2, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer busy2.Close()
+	e := setup(t, []int{1}, 1, func(c *vdev.Config) {
+		c.HTTPAddr, c.HTTPFallback = busy.Addr().String(), busy2.Addr().String()
+	})
+	if p := e.dev.HTTPPort(); p == busy.Addr().(*net.TCPAddr).Port || p == busy2.Addr().(*net.TCPAddr).Port {
+		t.Fatal("did not move off the busy ports")
+	}
+	var a struct{ Notice string }
+	getJSON(t, e.api+"/ui/api/activity", &a)
+	if !strings.Contains(a.Notice, "instead") || !strings.Contains(a.Notice, "Settings") {
+		t.Errorf("the page does not say where it is and what to do: %q", a.Notice)
+	}
+	// a port chosen on purpose that is taken gets the same treatment
+	e2 := setup(t, []int{1}, 1, func(c *vdev.Config) { c.HTTPAddr = busy.Addr().String() })
+	if e2.dev.HTTPPort() == busy.Addr().(*net.TCPAddr).Port {
+		t.Error("did not move off the port chosen on purpose")
+	}
+}

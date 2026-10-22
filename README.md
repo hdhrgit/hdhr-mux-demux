@@ -321,6 +321,9 @@ something else holds port 80). `-http :8080` (or `127.0.0.1:8080`) chooses the w
 the Settings page shows it as set by the command line, and `http_listen` there is the way to make it
 permanent. Port 80 is not needed to stream (streams are on 5004); it is only the address clients use
 when they add the multiplexer by IP, and discovery announces whichever port is in use.
+If neither 80 nor 8080 can be used (or the port you chose is taken), the web interface comes up on any
+free port instead: the log and the Activity and Settings pages say which, so you can open it there and
+change the Web / API address under Settings, Network, then restart.
 
 **Not discoverable until chosen.** A new multiplexer does not answer discovery broadcasts or announce
 itself over SSDP: it would otherwise show up in every DVR on the network the moment it starts, which is
