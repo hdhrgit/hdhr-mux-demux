@@ -3786,3 +3786,32 @@ func TestRequestLogCanBeLimitedByPort(t *testing.T) {
 		t.Error("a stream-port request was logged although only web and tcp were asked for")
 	}
 }
+
+// A list setting can be typed one per line, or separated by commas or spaces.
+func TestListSettingsAcceptCommasAndSpaces(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	state := filepath.Join(dir, "state")
+	os.WriteFile(cfgPath, []byte(`{"state_dir":"`+state+`"}`), 0o644)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := setup(t, []int{1}, 1, func(c *vdev.Config) { c.StateDir, c.Settings = state, mgr(cfgPath, cfg) })
+	req, _ := http.NewRequest("PUT", e.api+"/ui/api/settings", strings.NewReader(`{"changes":{"upstream.devices":["10.0.0.1, 10.0.0.2 10.0.0.3\n10.0.0.4"]}}`))
+	req.Header.Set("X-Requested-With", "hdhr-mux-ui")
+	req.Header.Set("Content-Type", "application/json")
+	if r, err := http.DefaultClient.Do(req); err != nil || r.StatusCode != 200 {
+		t.Fatalf("PUT: %v %v", err, r)
+	}
+	b, err := os.ReadFile(filepath.Join(state, "settings.json")) // read at start, so the running values wait for a restart
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved struct{ Upstream struct{ Devices []string } }
+	json.Unmarshal(b, &saved)
+	got := saved.Upstream.Devices
+	if len(got) != 4 || got[0] != "10.0.0.1" || got[3] != "10.0.0.4" {
+		t.Errorf("devices %v", got)
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"hdhrmux/internal/hdhrproto"
 )
@@ -353,16 +354,12 @@ func normalize(f Field, v any) (any, error) {
 		switch x := v.(type) {
 		case []any:
 			for _, e := range x {
-				if s, ok := e.(string); ok && strings.TrimSpace(s) != "" {
-					out = append(out, strings.TrimSpace(s))
+				if s, ok := e.(string); ok {
+					out = append(out, SplitList(s)...)
 				}
 			}
 		case string:
-			for _, s := range strings.FieldsFunc(x, func(r rune) bool { return r == '\n' || r == ',' }) {
-				if s = strings.TrimSpace(s); s != "" {
-					out = append(out, s)
-				}
-			}
+			out = SplitList(x)
 		default:
 			return nil, errors.New("must be a list")
 		}
@@ -509,4 +506,11 @@ func init() {
 	for i := range schema {
 		schema[i].Restart = restartKeys[schema[i].Key]
 	}
+}
+
+// SplitList splits what a person typed into a list: entries can be one per line, or
+// separated by commas, semicolons or spaces. None of the lists (device addresses and IDs,
+// tuners) has an entry with a space in it.
+func SplitList(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ';' || unicode.IsSpace(r) })
 }
