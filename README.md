@@ -371,7 +371,7 @@ See [config.example.json](config.example.json). Notable keys:
 * `log_requests` (false) writes every client request to the log; `log_requests_on` (empty = all) limits that to some of the ports: `web` (the web / API port), `udp` and `tcp` (the control port, 65001) and `stream` (5004), separated by commas, e.g. `"web,tcp"`. Both apply while running (Settings, Diagnostics).
 * `lineup.atsc3` (true): list the ATSC 3.0 channels in the lineup, the playlist and the guide. `false` leaves them out of those listings only: a client that asks for one by number is still served. Many are encrypted (DRM) and clients skip those themselves. An own scan (`lineup.scan_mode: own`) says in the log when ATSC 3.0 channels could not be scanned because no 3.0-capable tuner (0 and 1 of a 4K device) was free; the device scan (the default) covers both kinds.
 * `auto_join_direct` (true): an `/auto/` request joins a tuner a direct client (tvheadend, `/tunerN/`) already holds on the same channel.
-* `auto_join_other_locations` (true): the same station can be received on more than one RF channel (a second antenna or feed, a translator) while a device's lineup lists only one of them. An `/auto/` request for a channel that a session already open carries on another RF channel (found from that multiplex's own channel table) rides that session instead of taking a tuner. Never opens a tuner somewhere other than the lineup's place; set to `false` to always use the lineup's.
+* `auto_join_other_locations` (false): the same station can be received on more than one RF channel (a second antenna or feed, a translator) while a device's lineup lists only one of them. An `/auto/` request for a channel that a session already open carries on another RF channel (found from that multiplex's own channel table) rides that session instead of taking a tuner. Never opens a tuner somewhere other than the lineup's place; set to `false` to always use the lineup's.
 * `evict_scans` (true): when every tuner is busy, an `/auto/` request takes one from a control client that is only collecting tables (tvheadend's idle guide scan): its PID filter has completed no programme for 10 s. The scanner finds its data stopped and its lock gone. A client that is watching a programme, or has a viewer on its tuner, is never touched. Set to `false` to leave direct clients' tuners alone even then.
 * `stream_ttl` (3, at most 8): the IP TTL of the video the multiplexer sends (HTTP streams and UDP/RTP targets). Real devices send their streams with a TTL of 3 so they cannot travel beyond a couple of routers; the multiplexer does the same, so a client has to be within two router hops of it. Larger values are quietly cut to 8 and `0` means the default: a device pushes a lot of bandwidth and must not be usable from afar, so use a VPN for remote viewing. For the same reason a UDP/RTP `target` (a control request cannot be authenticated, and its source can be forged) must be an address on a private IPv4 network (RFC 1918), this machine or link-local; any other target is refused.
 
@@ -443,12 +443,13 @@ are embedded in the binary.
   after a new start, and a new transmitter shows up within `guide.refresh`.
   The page is also where the choices are made (saved in `<state_dir>/channels.json`; they apply at once,
   and need the same permission as the settings page):
-  * **Video** (a checkbox per RF channel): where `/auto/` may tune the channel. Several can be on, but not none: whether a channel
+  * **Video** (a checkbox per RF channel): where `/auto/` may tune the channel. By default only the lineup's RF
+    channel is ticked; tick another to allow it. Several can be on, but not none: whether a channel
     exists at all is decided in the Lineup (the star column). An RF channel that every channel on it has switched off is not tuned for the guide.
   * **First**: the place tried first. A request first rides a session that is already open at any allowed
     place, then tunes the first choice, then the others, one after the other until one works. Without a
-    choice the place from the devices' lineups is first. Other places are used only when
-    `auto_join_other_locations` is on (or the place is the chosen first).
+    choice the place from the devices' lineups is first. Other places are used only when they are ticked
+    (or `auto_join_other_locations` is on).
   * **EPG**: which RF channel the guide comes from. Without a choice it is the one that goes furthest
     ahead. Guides of different RF channels are never merged.
   Each choice has a "use the lineup's place" / "use automatic" link to undo it.

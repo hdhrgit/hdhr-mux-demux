@@ -102,7 +102,7 @@ type Config struct {
 	// already receiving joins that tuner instead of taking another. Never the other
 	// way round: a direct client does not join an /auto/ stream.
 	AutoJoinDirect *bool `json:"auto_join_direct"`
-	// AutoJoinOtherLocations (default true): an /auto/ request for a channel that a
+	// AutoJoinOtherLocations (default false: the lineup's place only; a person ticks others on the Advanced tab): an /auto/ request for a channel that a
 	// session already open receives on another RF channel than the lineup lists (the
 	// same station via another antenna or feed) rides that session.
 	AutoJoinOtherLocations *bool `json:"auto_join_other_locations"`
@@ -287,7 +287,7 @@ func loadConfig(path string, overlay []byte, env bool) (*Config, error) {
 		c.AutoJoinDirect = &t
 	}
 	if c.AutoJoinOtherLocations == nil {
-		t := true
+		t := false
 		c.AutoJoinOtherLocations = &t
 	}
 	if c.EvictScans == nil {

@@ -449,7 +449,7 @@ function channelNotes(c, ed) {
   const used = c.locations.find((l) => l.used);
   const first = c.locations.find((l) => l.first);
   const bits = [];
-  bits.push(`Video: tried first on <b>${first ? mhz(first.frequency) : 'nothing'}</b>${c.video ? ' (your choice) ' + (ed ? '<button type="button" class="link" data-act="reset-first">use the lineup\'s place</button>' : '') : ''}; the others are used when the first cannot be tuned or is already open.`);
+  bits.push(`Video: tried first on <b>${first ? mhz(first.frequency) : 'nothing'}</b>${c.video ? ' (your choice) ' + (ed ? '<button type="button" class="link" data-act="reset-first">use the lineup\'s place</button>' : '') : ''}; the other ticked RF channels are used when the first cannot be tuned or is already open. Only the lineup's RF channel is ticked until you tick another.`);
   bits.push(`EPG: ${c.guide ? `from <b>${mhz(c.guide)}</b> (your choice) ` + (ed ? '<button type="button" class="link" data-act="reset-guide">use automatic</button>' : '') : `automatic${used ? ` (<b>${mhz(used.frequency)}</b>, the one that goes furthest ahead)` : ': there is no EPG for this channel yet'}`}.`);
   return `<p class="chan-notes">${bits.join('<br>')}</p>`;
 }

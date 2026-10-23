@@ -17,6 +17,9 @@ import (
 type Pref struct {
 	// Off lists RF channels (Hz) the channel must not be tuned on.
 	Off []uint64 `json:"off,omitempty"`
+	// On lists RF channels (Hz) besides the lineup's that the channel may be tuned on: by
+	// default only the lineup's place is used, and a person allows others here.
+	On []uint64 `json:"on,omitempty"`
 	// Video is the RF channel to try first (0 = the devices' lineup's place).
 	Video uint64 `json:"video,omitempty"`
 	// Guide is the RF channel whose programme guide is used (0 = automatic: the one
@@ -24,11 +27,21 @@ type Pref struct {
 	Guide uint64 `json:"guide,omitempty"`
 }
 
-func (p Pref) empty() bool { return len(p.Off) == 0 && p.Video == 0 && p.Guide == 0 }
+func (p Pref) empty() bool { return len(p.Off) == 0 && len(p.On) == 0 && p.Video == 0 && p.Guide == 0 }
 
 // IsOff reports whether freq is switched off for the channel.
 func (p Pref) IsOff(freq uint64) bool {
 	for _, f := range p.Off {
+		if f == freq {
+			return true
+		}
+	}
+	return false
+}
+
+// IsOn reports whether freq has been allowed for the channel.
+func (p Pref) IsOn(freq uint64) bool {
+	for _, f := range p.On {
 		if f == freq {
 			return true
 		}
@@ -79,6 +92,7 @@ func (s *Store) Rev() uint64 { return s.rev.Load() }
 // the channel from the file.
 func (s *Store) Set(number string, p Pref) error {
 	sort.Slice(p.Off, func(i, j int) bool { return p.Off[i] < p.Off[j] })
+	sort.Slice(p.On, func(i, j int) bool { return p.On[i] < p.On[j] })
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	old := s.m[number]

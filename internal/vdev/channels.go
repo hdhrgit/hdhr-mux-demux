@@ -85,7 +85,7 @@ func (d *Device) placesWith(e lineup.Entry, useOff bool) []place {
 	if !atsc3 {
 		others := d.lv().AutoJoinOtherLocations
 		for _, r := range d.rf.Snapshot() {
-			if !others && r.Frequency != pref.Video {
+			if !others && r.Frequency != pref.Video && !pref.IsOn(r.Frequency) {
 				continue
 			}
 			if r.Modulation == "atsc3" {
@@ -175,7 +175,7 @@ type cpView struct {
 
 // channelsView builds the page from the lineup, what the RF channel table has
 // learned and the choices that were made.
-func channelsView(entries []lineup.Entry, rf []rfmap.RF, prefs map[string]chanprefs.Pref, guideSource func(string) uint64, now time.Time) cpView {
+func channelsView(entries []lineup.Entry, rf []rfmap.RF, prefs map[string]chanprefs.Pref, guideSource func(string) uint64, others bool, now time.Time) cpView {
 	byFreq := map[uint64]*rfmap.RF{}
 	for i := range rf {
 		byFreq[rf[i].Frequency] = &rf[i]
@@ -215,10 +215,18 @@ func channelsView(entries []lineup.Entry, rf []rfmap.RF, prefs map[string]chanpr
 		sort.Slice(locs, func(i, j int) bool { return locs[i].Frequency < locs[j].Frequency })
 		pref := prefs[e.GuideNumber]
 		c.Video, c.Guide = pref.Video, pref.Guide
-		// switched off at every place (an old choice, from when that hid the channel): none is
+		// what may be used: the lineup's place, and the others only when they were allowed (or
+		// the multiplexer is set to use them all); never what was switched off
+		allowed := func(l cpLocation) bool {
+			if pref.IsOff(l.Frequency) {
+				return false
+			}
+			return l.Chosen || others || pref.IsOn(l.Frequency) || pref.Video == l.Frequency
+		}
+		// none allowed (an old choice from when that hid the channel): the lineup's place is used
 		allOff := len(locs) > 0
 		for i := range locs {
-			if !pref.IsOff(locs[i].Frequency) {
+			if allowed(locs[i]) {
 				allOff = false
 			}
 		}
@@ -226,7 +234,7 @@ func channelsView(entries []lineup.Entry, rf []rfmap.RF, prefs map[string]chanpr
 		first := false
 		for i := range locs {
 			l := &locs[i]
-			l.Off = pref.IsOff(l.Frequency) && !allOff
+			l.Off = !allowed(*l) && !(allOff && l.Chosen)
 			l.Used = used != 0 && l.Frequency == used
 			// the place tried first: the chosen one, else the lineup's, among those switched on
 			if !first && !l.Off && (pref.Video == l.Frequency || (pref.Video == 0 && l.Chosen)) {
@@ -289,7 +297,7 @@ func (d *Device) guideSource(number string) uint64 {
 
 func (d *Device) handleUIChannels(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	v := channelsView(d.lineup.Entries(true), d.rf.Snapshot(), d.prefs.All(), d.guideSource, time.Now())
+	v := channelsView(d.lineup.Entries(true), d.rf.Snapshot(), d.prefs.All(), d.guideSource, d.lv().AutoJoinOtherLocations, time.Now())
 	v.Editable = d.adminCheck(nil, r, false) && !d.cfg.SettingsLocked
 	writeJSON(w, v)
 }
@@ -335,6 +343,13 @@ func (d *Device) handleUIChannelPut(w http.ResponseWriter, r *http.Request) {
 	if offAll {
 		writeJSONStatus(w, http.StatusBadRequest, map[string]any{"error": "at least one RF channel has to stay on; to switch the channel off, disable it in the Lineup"})
 		return
+	}
+	// what is not switched off is allowed: the page shows these places as ticked
+	p.On = nil
+	for f, ok := range known {
+		if ok && !(chanprefs.Pref{Off: p.Off}).IsOff(f) && f != e.Frequency {
+			p.On = append(p.On, f)
+		}
 	}
 	if p.Video != 0 && (chanprefs.Pref{Off: p.Off}).IsOff(p.Video) {
 		writeJSONStatus(w, http.StatusBadRequest, map[string]any{"error": "the first choice for video cannot be switched off"})
