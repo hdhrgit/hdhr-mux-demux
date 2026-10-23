@@ -128,6 +128,8 @@ type Config struct {
 	LogRequests bool
 	// LogRequestsOn limits it to requests received on these (web, udp, tcp, stream; empty = all).
 	LogRequestsOn string
+	// TunerNames is how the Activity page names a physical tuner: "id" or "ip".
+	TunerNames string
 
 	// IdleRelease frees a tuned tuner nobody is using after this long.
 	IdleRelease time.Duration
