@@ -70,3 +70,41 @@ func itoa(n int) string {
 	}
 	return string(b)
 }
+
+// The broadcast this process sends to look for devices is heard by its own listener on the
+// same machine; that is not a client and nobody is answered or logged for it.
+func TestOwnDiscoveryBroadcastIsIgnored(t *testing.T) {
+	pc, err := net.ListenPacket("udp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	h := directHandler{make(chan bool, 4), make(chan bool, 4)}
+	go ServeUDP(pc, h)
+	port := pc.LocalAddr().(*net.UDPAddr).Port
+
+	Discover([]string{net.JoinHostPort("127.255.255.255", itoa(port))}, 300*time.Millisecond)
+	select {
+	case <-h.viaPlain:
+		t.Fatal("our own broadcast was taken for a client's")
+	case <-h.viaDirect:
+		t.Fatal("our own broadcast was taken for a client's")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// somebody else's broadcast (a socket this process did not open for discovery) still is
+	c, err := net.Dial("udp4", net.JoinHostPort("127.255.255.255", itoa(port)))
+	if err != nil {
+		t.Skip(err)
+	}
+	defer c.Close()
+	req := &Packet{Type: TypeDiscoverReq}
+	req.AddU32(TagDeviceType, DeviceTypeTuner)
+	req.AddU32(TagDeviceID, DeviceIDWildcard)
+	c.Write(req.Encode())
+	select {
+	case <-h.viaPlain:
+	case <-time.After(time.Second):
+		t.Skip("the system did not deliver a loopback broadcast")
+	}
+}
