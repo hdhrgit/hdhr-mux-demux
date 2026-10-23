@@ -458,6 +458,10 @@ are embedded in the binary.
   tunes the requested channel at its own place first, then the places of the others. Which of them are
   listed is the Lineup's business: you can disable all but one and requests for it still ride the others.
   Nothing is merged on its own, and the multiplexer does not check that they really are the same.
+* **Logs** – what the program has logged lately (the last 4000 lines), followed live: a filter, chips for
+  the parts that log (`hub`, `guide`, `req`, `upstream` …), Follow, Clear and a Download of the whole buffer.
+  It is a server-sent event stream (`/ui/api/logs/stream`, plain HTTP: through a proxy it needs no
+  WebSocket settings, only no buffering, which the answer asks for). Local network only, like Settings.
 * **Appearance** (the half-moon button) – System / Light / Dark, and a choice of theme for each:
   Paper, Mist, Mint, Lilac (light) and Slate, Midnight, Dusk, Ember (dark). None of them is pure white
   or pure black. *System* follows the device and switches between your light and dark theme by

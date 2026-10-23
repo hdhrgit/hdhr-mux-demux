@@ -23,6 +23,7 @@ import (
 	"hdhrmux/internal/hdhrproto"
 	"hdhrmux/internal/hub"
 	"hdhrmux/internal/lineup"
+	"hdhrmux/internal/logbuf"
 	"hdhrmux/internal/merges"
 	"hdhrmux/internal/rfmap"
 )
@@ -128,6 +129,8 @@ type Config struct {
 	LogRequests bool
 	// LogRequestsOn limits it to requests received on these (web, udp, tcp, stream; empty = all).
 	LogRequestsOn string
+	// Logs holds the lines the program logged lately, for the Logs page (nil: no such page).
+	Logs *logbuf.Buffer
 
 	// IdleRelease frees a tuned tuner nobody is using after this long.
 	IdleRelease time.Duration

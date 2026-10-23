@@ -344,3 +344,11 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .mchip .x:hover { background: var(--border); color: var(--text); }
 .merge-add { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
 .minput { flex: 1 1 180px; min-width: 0; background: var(--bg-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font: inherit; }
+.log-box { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5; height: calc(100vh - 330px); min-height: 320px; overflow: auto; padding: 8px 12px; }
+.log-line { white-space: pre-wrap; word-break: break-word; }
+.log-line .t { color: var(--faint); }
+.log-line.warn { color: var(--warn); }
+.log-chips { margin: 0 0 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+.log-chips small { opacity: .7; margin-left: 2px; }
+.check { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; cursor: pointer; }
+.check input { accent-color: var(--accent); }

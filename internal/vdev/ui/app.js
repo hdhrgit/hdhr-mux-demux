@@ -584,15 +584,90 @@ function renderChannels(root) {
   load();
 }
 
+/* ---------- logs page: the log, followed live (server-sent events) ---------- */
+const logs = { lines: [], q: '', comp: 'all', tail: true, es: null, pending: [], raf: 0 };
+const LOG_KEEP = 5000;
+function logComponent(text) {
+  const m = /^\d{4}\/\d\d\/\d\d \d\d:\d\d:\d\d(?:\.\d+)? ([a-z0-9_-]+):/i.exec(text);
+  return m ? m[1].toLowerCase() : '';
+}
+function logLineHTML(text) {
+  const m = /^(\d{4}\/\d\d\/\d\d \d\d:\d\d:\d\d(?:\.\d+)?) (.*)$/s.exec(text);
+  const warn = /\b(fail(ed|ing|ure)?|error|panic|no signal|cannot|refused|timed out|stalled)\b/i.test(text);
+  return `<div class="log-line${warn ? ' warn' : ''}">${m ? `<span class="t">${esc(m[1])}</span> ${esc(m[2])}` : esc(text)}</div>`;
+}
+function logVisible(l) {
+  if (logs.comp !== 'all' && (logComponent(l.text) || 'other') !== logs.comp) return false;
+  return !logs.q || l.text.toLowerCase().includes(logs.q);
+}
+function logChips() {
+  const n = {};
+  for (const l of logs.lines) { const c = logComponent(l.text) || 'other'; n[c] = (n[c] || 0) + 1; }
+  const comps = Object.keys(n).sort((a, b) => n[b] - n[a]);
+  return ['all', ...comps].map((c) => `<button type="button" data-comp="${esc(c)}" aria-pressed="${logs.comp === c}">${c === 'all' ? 'All' : esc(c)}${c === 'all' ? '' : ` <small>${n[c]}</small>`}</button>`).join('');
+}
+function renderLogLines() {
+  const box = $('#log-box'); if (!box) return;
+  box.innerHTML = logs.lines.filter(logVisible).map((l) => logLineHTML(l.text)).join('');
+  $('#log-chips').innerHTML = logChips();
+  if (logs.tail) box.scrollTop = box.scrollHeight;
+}
+function flushLogs() {
+  logs.raf = 0;
+  const box = $('#log-box'); if (!box) return;
+  const add = logs.pending; logs.pending = [];
+  logs.lines.push(...add);
+  if (logs.lines.length > LOG_KEEP) { logs.lines.splice(0, logs.lines.length - LOG_KEEP); renderLogLines(); return; }
+  const fresh = add.filter(logVisible);
+  if (fresh.length) box.insertAdjacentHTML('beforeend', fresh.map((l) => logLineHTML(l.text)).join(''));
+  $('#log-chips').innerHTML = logChips();
+  if (logs.tail) box.scrollTop = box.scrollHeight;
+}
+function renderLogs(root) {
+  root.innerHTML = `<div class="page-title"><h1>Logs</h1><p id="log-status">Connecting…</p></div>
+    <div class="toolbar"><label class="search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <input id="lq" type="search" placeholder="Filter the log" aria-label="Filter the log" autocomplete="off"></label>
+      <label class="check"><input type="checkbox" id="ltail" ${logs.tail ? 'checked' : ''}> Follow</label>
+      <button type="button" class="btn" id="lclear">Clear</button>
+      <a class="btn" href="/ui/api/logs?download=1" download>Download</a></div>
+    <div class="filters log-chips" id="log-chips" role="group" aria-label="Component"></div>
+    <div class="log-box" id="log-box" tabindex="0"></div>`;
+  const q = $('#lq'); q.value = logs.q;
+  q.addEventListener('input', () => { logs.q = q.value.trim().toLowerCase(); renderLogLines(); });
+  $('#ltail').addEventListener('change', (e) => { logs.tail = e.target.checked; if (logs.tail) { const b = $('#log-box'); b.scrollTop = b.scrollHeight; } });
+  $('#lclear').addEventListener('click', () => { logs.lines = []; renderLogLines(); });
+  $('#log-chips').addEventListener('click', (e) => { const b = e.target.closest('[data-comp]'); if (b) { logs.comp = b.dataset.comp; renderLogLines(); } });
+  // reading back up the log stops following it
+  $('#log-box').addEventListener('wheel', (e) => { if (e.deltaY < 0 && logs.tail) { logs.tail = false; $('#ltail').checked = false; } }, { passive: true });
+  logs.lines = []; logs.pending = [];
+  renderLogLines();
+  const status = (t) => { const s = $('#log-status'); if (s) s.textContent = t; };
+  fetch('/ui/api/logs?n=1', { cache: 'no-store' }).then((r) => {
+    if (r.status === 404) { status('This multiplexer does not keep its log for the page.'); return; }
+    if (!r.ok) { status('The log can only be read from the local network.'); return; }
+    const es = new EventSource('/ui/api/logs/stream');
+    logs.es = es;
+    es.onopen = () => { setConn(true); status('Following the log live'); };
+    es.onerror = () => { setConn(false); status('Reconnecting…'); };
+    es.onmessage = (e) => {
+      logs.pending.push({ id: Number(e.lastEventId), text: e.data });
+      if (!logs.raf) logs.raf = requestAnimationFrame(flushLogs);
+    };
+  }).catch(() => status('Could not reach the multiplexer.'));
+  cleanup = () => { if (logs.es) { logs.es.close(); logs.es = null; } if (logs.raf) { cancelAnimationFrame(logs.raf); logs.raf = 0; } };
+}
+
 /* ---------- router ---------- */
-const PAGES = { activity: renderActivity, lineup: renderLineup, advanced: renderChannels, settings: renderSettings };
+let cleanup = null; // what the page that is leaving has to undo (the log stream)
+const PAGES = { activity: renderActivity, lineup: renderLineup, advanced: renderChannels, logs: renderLogs, settings: renderSettings };
 function route() {
   stopped = true; clearTimeout(timer);
+  if (cleanup) { cleanup(); cleanup = null; }
   let name = (location.hash.replace(/^#\/?/, '') || 'activity').split('/')[0];
   if (name === 'channels') name = 'advanced'; // its old name
   const page = PAGES[name] ? name : 'activity';
   $$('.tabs a').forEach((a) => { if (a.dataset.tab === page) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
-  document.title = `${{ activity: 'Activity', lineup: 'Lineup', advanced: 'Advanced', settings: 'Settings' }[page]} · ${$('.brand-text b').textContent}`;
+  document.title = `${{ activity: 'Activity', lineup: 'Lineup', advanced: 'Advanced', logs: 'Logs', settings: 'Settings' }[page]} · ${$('.brand-text b').textContent}`;
   stopped = false;
   PAGES[page]($('#app'));
 }
