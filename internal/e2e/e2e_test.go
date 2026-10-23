@@ -3582,7 +3582,7 @@ func TestActivityShowsWhatOtherApplicationsWatch(t *testing.T) {
 	waitFor(t, "the channel the other application watches", 8*time.Second, func() bool {
 		a.Tuners = nil
 		getJSON(t, e.api+"/ui/api/activity", &a)
-		return len(a.Tuners) == 4 && len(a.Tuners[2].Watching) == 1
+		return len(a.Tuners) == 4 && len(a.Tuners[2].Watching) == 1 && a.Tuners[2].Watching[0].Channel == "14.3"
 	})
 	if w := a.Tuners[2].Watching[0]; w.Channel != "14.3" || w.Name == "" {
 		t.Errorf("watching %+v, want 14.3 and its name", w)
@@ -3934,5 +3934,31 @@ func TestUnlockedGuidePassLetsGoWhenTheTunerIsCleared(t *testing.T) {
 	}
 	if m.Failovers != 0 {
 		t.Errorf("the pass looked for another tuner (%v failovers)", m.Failovers)
+	}
+}
+
+// An application that takes the whole multiplex (no PID filter) is shown as that, not as
+// every channel on it.
+func TestActivityShowsFullMultiplexForUnfilteredTuner(t *testing.T) {
+	e := setup(t, []int{4}, 4, nil)
+	e.lu.Replace(testLineup)
+	foreign, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/tuner2/ch473000000", e.fakes[0].StreamPort()))
+	if err != nil || foreign.StatusCode != 200 {
+		t.Fatalf("foreign client: %v %v", foreign, err)
+	}
+	defer foreign.Body.Close()
+	var a struct {
+		Tuners []struct {
+			State    string
+			Watching []struct{ Channel, Name string }
+		}
+	}
+	waitFor(t, "the whole multiplex on the activity page", 8*time.Second, func() bool {
+		a.Tuners = nil
+		getJSON(t, e.api+"/ui/api/activity", &a)
+		return len(a.Tuners) == 4 && len(a.Tuners[2].Watching) == 1
+	})
+	if w := a.Tuners[2].Watching[0]; w.Channel != "Full multiplex" {
+		t.Errorf("watching %+v, want Full multiplex", w)
 	}
 }

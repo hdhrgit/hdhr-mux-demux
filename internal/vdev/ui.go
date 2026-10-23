@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"hdhrmux/internal/hdhrproto"
@@ -208,9 +207,9 @@ func (d *Device) entryFor(label string) (lineup.Entry, bool) {
 // like us from the device's side), and how it receives the stream. Answers are
 // cached for a few seconds: the activity page asks every two.
 func (d *Device) holderOf(idx int, freq uint64) (holder string, local bool, transport string, watching []uiOtherChan) {
-	holderMu.Lock()
-	c, ok := holderCache[idx]
-	holderMu.Unlock()
+	d.holderMu.Lock()
+	c, ok := d.holderCache[idx]
+	d.holderMu.Unlock()
 	if ok && time.Since(c.at) < 4*time.Second {
 		return c.holder, c.local, c.transport, c.watching
 	}
@@ -227,9 +226,12 @@ func (d *Device) holderOf(idx int, freq uint64) (holder string, local bool, tran
 		}
 		watching = d.otherWatching(pool, ref.DeviceID, ref.Index, freq)
 	}
-	holderMu.Lock()
-	holderCache[idx] = holderInfo{holder, local, transport, watching, time.Now()}
-	holderMu.Unlock()
+	d.holderMu.Lock()
+	if d.holderCache == nil {
+		d.holderCache = map[int]holderInfo{}
+	}
+	d.holderCache[idx] = holderInfo{holder, local, transport, watching, time.Now()}
+	d.holderMu.Unlock()
 	return holder, local, transport, watching
 }
 
@@ -240,11 +242,6 @@ type holderInfo struct {
 	watching  []uiOtherChan
 	at        time.Time
 }
-
-var (
-	holderMu    sync.Mutex
-	holderCache = map[int]holderInfo{}
-)
 
 // isLocalAddress reports whether ip is one of this machine's own addresses.
 func isLocalAddress(ip net.IP) bool {
@@ -531,6 +528,16 @@ func (d *Device) otherWatching(pool *upstream.Pool, dev uint32, idx int, freq ui
 	set, err := ts.ParsePIDSet(v)
 	if err != nil || set.Empty() {
 		return nil
+	}
+	// nothing is filtered out: it takes the whole multiplex, whatever it does with it
+	if set == ts.FullSet() {
+		o := uiOtherChan{Channel: "Full multiplex"}
+		for _, r := range d.rf.Snapshot() {
+			if r.Frequency == freq && len(r.Programs) > 0 {
+				o.Name = fmt.Sprintf("all %d programmes", len(r.Programs))
+			}
+		}
+		return []uiOtherChan{o}
 	}
 	var out []uiOtherChan
 	for _, r := range d.rf.Snapshot() {
