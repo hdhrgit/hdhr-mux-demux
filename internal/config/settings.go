@@ -99,6 +99,7 @@ var schema = []Field{
 	{Key: "log_requests", Group: "Diagnostics", Label: "Log every request", Type: "bool", Help: "Write every client request to the log. Noisy; for finding out what a client does."},
 	{Key: "log_requests_on", Group: "Diagnostics", Label: "Log requests received on", Type: "text", Placeholder: "all", Help: "With Log every request on, only the requests that arrive on these, separated by commas: web (the web / API port), udp and tcp (the control port), stream (the streaming port). Empty means all."},
 	{Key: "pprof_listen", Group: "Diagnostics", Label: "Profiling address", Type: "text", Placeholder: "off", Help: "For example 127.0.0.1:6060. Go profiling endpoint; leave empty unless you are debugging."},
+	{Key: "tuner_names", Group: "Miscellaneous", Label: "Show tuners as", Type: "choice", Choices: []string{"id", "ip"}, Help: "How the Activity page names a physical tuner: id is the device ID and tuner number (10813750/3), ip is the device's address and the tuner number (172.31.31.112/3)."},
 }
 
 // Schema lists the settings the web interface offers.

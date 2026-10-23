@@ -78,7 +78,10 @@ type Config struct {
 	// LogRequestsOn limits what log_requests logs to requests received on these: web (the web /
 	// API port), udp and tcp (the control port), stream (the streaming port). Empty: all.
 	LogRequestsOn string `json:"log_requests_on"`
-	PprofListen   string `json:"pprof_listen"` // e.g. "127.0.0.1:6060": Go profiling endpoint (off by default)
+	// TunerNames is how the Activity page names a physical tuner: "id" (DEVICEID/N, the
+	// default) or "ip" (the device's address and the tuner number).
+	TunerNames  string `json:"tuner_names"`
+	PprofListen string `json:"pprof_listen"` // e.g. "127.0.0.1:6060": Go profiling endpoint (off by default)
 
 	StateDir string `json:"state_dir"` // lineup.json and device id live here
 	// HTTPListenDefault says http_listen was not set anywhere, so it may fall back to
@@ -310,6 +313,13 @@ func loadConfig(path string, overlay []byte, env bool) (*Config, error) {
 	}
 	if c.StreamListen == "" {
 		c.StreamListen = ":5004"
+	}
+	switch c.TunerNames {
+	case "":
+		c.TunerNames = "id"
+	case "id", "ip":
+	default:
+		return nil, fmt.Errorf("tuner_names %q: want id or ip", c.TunerNames)
 	}
 	switch c.Lineup.ScanMode {
 	case "":

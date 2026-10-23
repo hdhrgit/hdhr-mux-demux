@@ -20,7 +20,17 @@ function dur(sec) {
 }
 const EXT = '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2H2.5v7.5H10V7M7 2h3v3M10 2L5.5 6.5"/></svg>';
 // a physical tuner's id, linking to the device's own status page for it
-const phys = (id, url) => (url ? `<a class="phys mono" href="${esc(url)}" target="_blank" rel="noopener" title="Open this tuner's own status page">${esc(id)}${EXT}</a>` : `<span class="mono">${esc(id)}</span>`);
+// a physical tuner as "DEVICEID/N", or as "address/N" when the multiplexer is set to show addresses (Settings, Miscellaneous)
+let tunerNames = 'id';
+function physName(id, url) {
+  if (tunerNames !== 'ip' || !url) return id;
+  try {
+    const m = /^[0-9A-Fa-f]+\/(\d+)/.exec(id);
+    if (m) return `${new URL(url).hostname}/${m[1]}`;
+  } catch (e) { /* not an address: show the id */ }
+  return id;
+}
+const phys = (id, url) => (url ? `<a class="phys mono" href="${esc(url)}" target="_blank" rel="noopener" title="Open this tuner's own status page (${esc(id)})">${esc(physName(id, url))}${EXT}</a>` : `<span class="mono">${esc(id)}</span>`);
 const level = (v) => (v >= 70 ? '' : v >= 40 ? 'warn' : 'bad');
 
 /* ---------- appearance ---------- */
@@ -167,7 +177,10 @@ function statCard(label, value, unit, sub, extra = '', cls = '') {
   return `<div class="card stat ${cls}"><div class="label">${label}</div><div class="value">${value}<small>${unit}</small></div><div class="sub">${sub}</div>${extra}</div>`;
 }
 
+let lastActivity = null, idleOpen = false; // the free tuners are folded away until asked for
 function updateActivity(a) {
+  lastActivity = a;
+  tunerNames = a.tunerNames || 'id';
   const nowSec = a.time / 1000, S = a.summary;
   patch($('#setup-wrap'), (a.setup ? `<div class="banner warn" role="status" style="margin-top:14px"><b>Nothing to serve yet</b><p>${esc(a.setup)} <a href="#/settings">Open Settings</a></p></div>` : '') + (a.notice ? `<div class="banner" role="status" style="margin-top:14px"><b>Not discoverable</b><p>${esc(a.notice)} <a href="#/settings">Open Settings</a></p></div>` : ''));
   $('#device-sub').textContent = `${a.device.model} · ${a.device.id}${a.device.version ? ' · v' + a.device.version.replace(/^v/, '') : ''} · up ${dur(a.device.uptime)}`;
@@ -191,8 +204,8 @@ function updateActivity(a) {
   $('#n-active').textContent = active.length;
   patch($('#tuners'), active.length ? active.map((t) => tunerHTML(t, nowSec)).join('') :
     `<div class="card empty" style="grid-column:1/-1"><h3>Quiet right now</h3>Nobody is watching. All ${S.tuners} tuners are free.</div>`);
-  patch($('#idle-wrap'), idle.length && active.length ? `<div class="section-title">Free tuners <span class="count">${idle.length}</span></div>
-    <div class="idle-row">${idle.map((t) => `<span class="pill"><b>${t.index}</b>${phys(t.physical, t.physicalUrl)}</span>`).join('')}</div>` : '');
+  patch($('#idle-wrap'), idle.length && active.length ? `<div class="section-title"><button type="button" class="fold" data-fold="idle" aria-expanded="${idleOpen}"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 2l4 4-4 4"/></svg>Free tuners</button> <span class="count">${idle.length}</span></div>
+    ${idleOpen ? `<div class="idle-grid">${idle.map((t) => `<span class="pill"><b>${t.index}</b>${phys(t.physical, t.physicalUrl)}</span>`).join('')}</div>` : ''}` : '');
 
   const bg = a.streams.filter((s) => s.background || s.lingering);
   patch($('#bg-wrap'), bg.length ? `<div class="section-title">Behind the scenes <span class="count">${bg.length}</span></div>
@@ -219,6 +232,11 @@ function renderActivity(root) {
     <div id="setup-wrap"></div>
     <div class="section-title">Active tuners <span class="count" id="n-active">–</span></div>
     <div class="tuners" id="tuners"></div><div id="idle-wrap"></div><div id="bg-wrap"></div><div class="counters" id="counters"></div><div id="sys-wrap"></div>`;
+  root.addEventListener('click', (e) => {
+    if (!e.target.closest('[data-fold="idle"]')) return;
+    idleOpen = !idleOpen;
+    if (lastActivity) updateActivity(lastActivity);
+  });
   const tick = async () => {
     clearTimeout(timer);
     if (stopped) return;
@@ -310,7 +328,7 @@ function renderLineup(root) {
 }
 
 /* ---------- settings page ---------- */
-const GROUPS = ['General', 'Network', 'Devices', 'Streaming', 'Lineup', 'Guide', 'Advanced', 'Diagnostics'];
+const GROUPS = ['General', 'Network', 'Devices', 'Streaming', 'Lineup', 'Guide', 'Advanced', 'Diagnostics', 'Miscellaneous'];
 let settingsState = null;
 
 function ctl(f, v, locked, env) {
@@ -584,15 +602,97 @@ function renderChannels(root) {
   load();
 }
 
+/* ---------- logs page: the log, followed live (server-sent events) ---------- */
+const logs = { lines: [], q: '', comp: 'all', tail: true, wrap: (() => { try { return localStorage.getItem('hdhrmux.logwrap') !== '0'; } catch (e) { return true; } })(), es: null, pending: [], raf: 0 };
+const LOG_KEEP = 5000;
+function logComponent(text) {
+  const m = /^\d{4}\/\d\d\/\d\d \d\d:\d\d:\d\d(?:\.\d+)? ([a-z0-9_-]+):/i.exec(text);
+  return m ? m[1].toLowerCase() : '';
+}
+function logLineHTML(text) {
+  const m = /^(\d{4}\/\d\d\/\d\d \d\d:\d\d:\d\d(?:\.\d+)?) (.*)$/s.exec(text);
+  const warn = /\b(fail(ed|ing|ure)?|error|panic|no signal|cannot|refused|timed out|stalled)\b/i.test(text);
+  return `<div class="log-line${warn ? ' warn' : ''}">${m ? `<span class="t">${esc(m[1])}</span> ${esc(m[2])}` : esc(text)}</div>`;
+}
+function logVisible(l) {
+  if (logs.comp !== 'all' && (logComponent(l.text) || 'other') !== logs.comp) return false;
+  return !logs.q || l.text.toLowerCase().includes(logs.q);
+}
+function logChips() {
+  const n = {};
+  for (const l of logs.lines) { const c = logComponent(l.text) || 'other'; n[c] = (n[c] || 0) + 1; }
+  const comps = Object.keys(n).sort((a, b) => n[b] - n[a]);
+  return ['all', ...comps].map((c) => `<button type="button" data-comp="${esc(c)}" aria-pressed="${logs.comp === c}">${c === 'all' ? 'All' : esc(c)}${c === 'all' ? '' : ` <small>${n[c]}</small>`}</button>`).join('');
+}
+function renderLogLines() {
+  const box = $('#log-box'); if (!box) return;
+  box.innerHTML = logs.lines.filter(logVisible).map((l) => logLineHTML(l.text)).join('');
+  $('#log-chips').innerHTML = logChips();
+  if (logs.tail) box.scrollTop = box.scrollHeight;
+}
+function flushLogs() {
+  logs.raf = 0;
+  const box = $('#log-box'); if (!box) return;
+  const add = logs.pending; logs.pending = [];
+  logs.lines.push(...add);
+  if (logs.lines.length > LOG_KEEP) { logs.lines.splice(0, logs.lines.length - LOG_KEEP); renderLogLines(); return; }
+  const fresh = add.filter(logVisible);
+  if (fresh.length) box.insertAdjacentHTML('beforeend', fresh.map((l) => logLineHTML(l.text)).join(''));
+  $('#log-chips').innerHTML = logChips();
+  if (logs.tail) box.scrollTop = box.scrollHeight;
+}
+function renderLogs(root) {
+  root.innerHTML = `<div class="page-title"><h1>Logs</h1><p id="log-status">Connecting…</p></div>
+    <div class="logbar"><label class="search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <input id="lq" type="search" placeholder="Filter the log" aria-label="Filter the log" autocomplete="off"></label>
+      <label class="check"><input type="checkbox" id="ltail" ${logs.tail ? 'checked' : ''}> Follow</label>
+      <label class="check"><input type="checkbox" id="lwrap" ${logs.wrap ? 'checked' : ''}> Wrap</label>
+      <button type="button" class="btn" id="lclear">Clear</button>
+      <a class="btn" href="/ui/api/logs?download=1" download>Download</a>
+      <span class="sep" aria-hidden="true"></span>
+      <div class="filters" id="log-chips" role="group" aria-label="Component"></div></div>
+    <div class="log-box${logs.wrap ? '' : ' nowrap'}" id="log-box" tabindex="0"></div>`;
+  const q = $('#lq'); q.value = logs.q;
+  q.addEventListener('input', () => { logs.q = q.value.trim().toLowerCase(); renderLogLines(); });
+  $('#lwrap').addEventListener('change', (e) => {
+    logs.wrap = e.target.checked;
+    try { localStorage.setItem('hdhrmux.logwrap', logs.wrap ? '1' : '0'); } catch (err) { /* kept for this visit only */ }
+    $('#log-box').classList.toggle('nowrap', !logs.wrap);
+  });
+  $('#ltail').addEventListener('change', (e) => { logs.tail = e.target.checked; if (logs.tail) { const b = $('#log-box'); b.scrollTop = b.scrollHeight; } });
+  $('#lclear').addEventListener('click', () => { logs.lines = []; renderLogLines(); });
+  $('#log-chips').addEventListener('click', (e) => { const b = e.target.closest('[data-comp]'); if (b) { logs.comp = b.dataset.comp; renderLogLines(); } });
+  // reading back up the log stops following it
+  $('#log-box').addEventListener('wheel', (e) => { if (e.deltaY < 0 && logs.tail) { logs.tail = false; $('#ltail').checked = false; } }, { passive: true });
+  logs.lines = []; logs.pending = [];
+  renderLogLines();
+  const status = (t) => { const s = $('#log-status'); if (s) s.textContent = t; };
+  fetch('/ui/api/logs?n=1', { cache: 'no-store' }).then((r) => {
+    if (r.status === 404) { status('This multiplexer does not keep its log for the page.'); return; }
+    if (!r.ok) { status('The log can only be read from the local network.'); return; }
+    const es = new EventSource('/ui/api/logs/stream');
+    logs.es = es;
+    es.onopen = () => { setConn(true); status('Following the log live'); };
+    es.onerror = () => { setConn(false); status('Reconnecting…'); };
+    es.onmessage = (e) => {
+      logs.pending.push({ id: Number(e.lastEventId), text: e.data });
+      if (!logs.raf) logs.raf = requestAnimationFrame(flushLogs);
+    };
+  }).catch(() => status('Could not reach the multiplexer.'));
+  cleanup = () => { if (logs.es) { logs.es.close(); logs.es = null; } if (logs.raf) { cancelAnimationFrame(logs.raf); logs.raf = 0; } };
+}
+
 /* ---------- router ---------- */
-const PAGES = { activity: renderActivity, lineup: renderLineup, advanced: renderChannels, settings: renderSettings };
+let cleanup = null; // what the page that is leaving has to undo (the log stream)
+const PAGES = { activity: renderActivity, lineup: renderLineup, advanced: renderChannels, logs: renderLogs, settings: renderSettings };
 function route() {
   stopped = true; clearTimeout(timer);
+  if (cleanup) { cleanup(); cleanup = null; }
   let name = (location.hash.replace(/^#\/?/, '') || 'activity').split('/')[0];
   if (name === 'channels') name = 'advanced'; // its old name
   const page = PAGES[name] ? name : 'activity';
   $$('.tabs a').forEach((a) => { if (a.dataset.tab === page) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
-  document.title = `${{ activity: 'Activity', lineup: 'Lineup', advanced: 'Advanced', settings: 'Settings' }[page]} · ${$('.brand-text b').textContent}`;
+  document.title = `${{ activity: 'Activity', lineup: 'Lineup', advanced: 'Advanced', logs: 'Logs', settings: 'Settings' }[page]} · ${$('.brand-text b').textContent}`;
   stopped = false;
   PAGES[page]($('#app'));
 }

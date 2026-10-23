@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"encoding/xml"
@@ -27,6 +28,7 @@ import (
 	"hdhrmux/internal/hdhrproto"
 	"hdhrmux/internal/hub"
 	"hdhrmux/internal/lineup"
+	"hdhrmux/internal/logbuf"
 	"hdhrmux/internal/ts"
 	"hdhrmux/internal/upstream"
 	"hdhrmux/internal/vdev"
@@ -3580,7 +3582,7 @@ func TestActivityShowsWhatOtherApplicationsWatch(t *testing.T) {
 	waitFor(t, "the channel the other application watches", 8*time.Second, func() bool {
 		a.Tuners = nil
 		getJSON(t, e.api+"/ui/api/activity", &a)
-		return len(a.Tuners) == 4 && len(a.Tuners[2].Watching) == 1
+		return len(a.Tuners) == 4 && len(a.Tuners[2].Watching) == 1 && a.Tuners[2].Watching[0].Channel == "14.3"
 	})
 	if w := a.Tuners[2].Watching[0]; w.Channel != "14.3" || w.Name == "" {
 		t.Errorf("watching %+v, want 14.3 and its name", w)
@@ -3813,6 +3815,151 @@ func TestListSettingsAcceptCommasAndSpaces(t *testing.T) {
 	got := saved.Upstream.Devices
 	if len(got) != 4 || got[0] != "10.0.0.1" || got[3] != "10.0.0.4" {
 		t.Errorf("devices %v", got)
+	}
+}
+
+// The Logs page: the log as JSON, and followed live as server-sent events that a browser
+// can resume where it left off.
+func TestLogsFollowedLive(t *testing.T) {
+	logs := logbuf.New(100)
+	e := setup(t, []int{1}, 1, func(c *vdev.Config) { c.Logs = logs })
+	fmt.Fprintln(logs, "hub: first")
+	fmt.Fprintln(logs, "guide: second")
+
+	var j struct {
+		Lines []struct {
+			ID   uint64
+			Text string
+		}
+	}
+	getJSON(t, e.api+"/ui/api/logs?n=10", &j)
+	if len(j.Lines) != 2 || j.Lines[1].Text != "guide: second" || j.Lines[1].ID != 2 {
+		t.Fatalf("lines %+v", j.Lines)
+	}
+
+	read := func(lastID string, want int) []string {
+		req, _ := http.NewRequest("GET", e.api+"/ui/api/logs/stream", nil)
+		if lastID != "" {
+			req.Header.Set("Last-Event-ID", lastID)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		resp, err := http.DefaultClient.Do(req.WithContext(ctx))
+		if err != nil || resp.StatusCode != 200 || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+			t.Fatalf("stream: %v %v", resp, err)
+		}
+		defer resp.Body.Close()
+		var got []string
+		sc := bufio.NewScanner(resp.Body)
+		for sc.Scan() && len(got) < want {
+			if d, ok := strings.CutPrefix(sc.Text(), "data: "); ok {
+				got = append(got, d)
+			}
+		}
+		return got
+	}
+	if got := read("", 2); len(got) != 2 || got[0] != "hub: first" {
+		t.Fatalf("a fresh browser gets the newest lines: %v", got)
+	}
+	go func() { time.Sleep(300 * time.Millisecond); fmt.Fprintln(logs, "req: third") }()
+	if got := read("2", 1); len(got) != 1 || got[0] != "req: third" {
+		t.Fatalf("a browser that reconnects gets what it missed, as it happens: %v", got)
+	}
+
+	e2 := setup(t, []int{1}, 1, nil)
+	if r, err := http.Get(e2.api + "/ui/api/logs"); err != nil || r.StatusCode != 404 {
+		t.Errorf("without a log buffer there is no logs page: %v %v", r, err)
+	}
+}
+
+// The Activity page is told how to name the physical tuners (Settings, Miscellaneous).
+func TestActivityTellsHowToNameTuners(t *testing.T) {
+	e := setup(t, []int{1}, 1, func(c *vdev.Config) { c.TunerNames = "ip" })
+	var a struct{ TunerNames string }
+	getJSON(t, e.api+"/ui/api/activity", &a)
+	if a.TunerNames != "ip" {
+		t.Errorf("tunerNames %q, want ip", a.TunerNames)
+	}
+	e2 := setup(t, []int{1}, 1, nil)
+	getJSON(t, e2.api+"/ui/api/activity", &a)
+	if a.TunerNames != "" && a.TunerNames != "id" {
+		t.Errorf("default tunerNames %q", a.TunerNames)
+	}
+}
+
+// Somebody clearing the tuner under an unlocked guide pass is a takeover like any other:
+// the pass lets go and does not go looking for another tuner (a "failover").
+func TestUnlockedGuidePassLetsGoWhenTheTunerIsCleared(t *testing.T) {
+	e := setup(t, []int{2}, 2, func(c *vdev.Config) { c.GuideHold = 8 * time.Second; c.GuideUnlocked = true })
+	e.lu.Replace(append([]lineup.Entry(nil), testLineup[2:]...)) // 14.1, 14.3 on 473 MHz only
+	raw := hdhrproto.NewControl(e.fakes[0].Addr())
+	defer raw.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		e.dev.GuidePass(ctx)
+	}()
+	defer func() { cancel(); <-done }()
+
+	tuner := -1
+	waitFor(t, "pass listening without a lock", 5*time.Second, func() bool {
+		for i := 0; i < 2; i++ {
+			tg, _ := raw.Get(fmt.Sprintf("/tuner%d/target", i))
+			lk, _ := raw.Get(fmt.Sprintf("/tuner%d/lockkey", i))
+			if strings.HasPrefix(tg, "http://") && lk == "none" {
+				tuner = i
+				return true
+			}
+		}
+		return false
+	})
+	if _, err := raw.Set(fmt.Sprintf("/tuner%d/channel", tuner), "none", 0); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the pass to let go", 5*time.Second, func() bool {
+		for _, s := range e.hub.Streams() {
+			if s.Background && s.Spec.Frequency == 473000000 {
+				return false
+			}
+		}
+		return true
+	})
+	var m struct{ Failovers float64 }
+	body, _ := io.ReadAll(func() io.Reader { r, _ := http.Get(e.api + "/metrics"); return r.Body }())
+	for _, ln := range strings.Split(string(body), "\n") {
+		if v, ok := strings.CutPrefix(ln, "hdhrmux_stream_failovers_total "); ok {
+			fmt.Sscan(v, &m.Failovers)
+		}
+	}
+	if m.Failovers != 0 {
+		t.Errorf("the pass looked for another tuner (%v failovers)", m.Failovers)
+	}
+}
+
+// An application that takes the whole multiplex (no PID filter) is shown as that, not as
+// every channel on it.
+func TestActivityShowsFullMultiplexForUnfilteredTuner(t *testing.T) {
+	e := setup(t, []int{4}, 4, nil)
+	e.lu.Replace(testLineup)
+	foreign, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/tuner2/ch473000000", e.fakes[0].StreamPort()))
+	if err != nil || foreign.StatusCode != 200 {
+		t.Fatalf("foreign client: %v %v", foreign, err)
+	}
+	defer foreign.Body.Close()
+	var a struct {
+		Tuners []struct {
+			State    string
+			Watching []struct{ Channel, Name string }
+		}
+	}
+	waitFor(t, "the whole multiplex on the activity page", 8*time.Second, func() bool {
+		a.Tuners = nil
+		getJSON(t, e.api+"/ui/api/activity", &a)
+		return len(a.Tuners) == 4 && len(a.Tuners[2].Watching) == 1
+	})
+	if w := a.Tuners[2].Watching[0]; w.Channel != "Full multiplex" {
+		t.Errorf("watching %+v, want Full multiplex", w)
 	}
 }
 
