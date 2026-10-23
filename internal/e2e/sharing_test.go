@@ -1055,3 +1055,43 @@ func TestSignalQualityZeroIsHiddenAtStart(t *testing.T) {
 		})
 	}
 }
+
+// Ending a stream (the last viewer leaves) is not a failure of it: the closing connection
+// must not be taken for a broken one and "failed over".
+func TestEndingAStreamIsNotAFailover(t *testing.T) {
+	e := setup(t, []int{4}, 4, nil)
+	e.lu.Replace(testLineup)
+	failovers := func() float64 {
+		resp, err := http.Get(e.api + "/metrics")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		for _, ln := range strings.Split(string(b), "\n") {
+			if v, ok := strings.CutPrefix(ln, "hdhrmux_stream_failovers_total "); ok {
+				var f float64
+				fmt.Sscan(v, &f)
+				return f
+			}
+		}
+		return -1
+	}
+	for i := 0; i < 40; i++ {
+		c, rc := e.open("/auto/v7.1")
+		if rc.StatusCode != 200 {
+			t.Fatalf("round %d: %d", i, rc.StatusCode)
+		}
+		select {
+		case <-c.data:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("round %d: no data", i)
+		}
+		c.cancel()
+		time.Sleep(60 * time.Millisecond)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	if n := failovers(); n != 0 {
+		t.Errorf("%v failovers while only ending streams", n)
+	}
+}
