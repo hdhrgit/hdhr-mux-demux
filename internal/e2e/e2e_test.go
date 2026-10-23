@@ -3886,3 +3886,53 @@ func TestActivityTellsHowToNameTuners(t *testing.T) {
 		t.Errorf("default tunerNames %q", a.TunerNames)
 	}
 }
+
+// Somebody clearing the tuner under an unlocked guide pass is a takeover like any other:
+// the pass lets go and does not go looking for another tuner (a "failover").
+func TestUnlockedGuidePassLetsGoWhenTheTunerIsCleared(t *testing.T) {
+	e := setup(t, []int{2}, 2, func(c *vdev.Config) { c.GuideHold = 8 * time.Second; c.GuideUnlocked = true })
+	e.lu.Replace(append([]lineup.Entry(nil), testLineup[2:]...)) // 14.1, 14.3 on 473 MHz only
+	raw := hdhrproto.NewControl(e.fakes[0].Addr())
+	defer raw.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		e.dev.GuidePass(ctx)
+	}()
+	defer func() { cancel(); <-done }()
+
+	tuner := -1
+	waitFor(t, "pass listening without a lock", 5*time.Second, func() bool {
+		for i := 0; i < 2; i++ {
+			tg, _ := raw.Get(fmt.Sprintf("/tuner%d/target", i))
+			lk, _ := raw.Get(fmt.Sprintf("/tuner%d/lockkey", i))
+			if strings.HasPrefix(tg, "http://") && lk == "none" {
+				tuner = i
+				return true
+			}
+		}
+		return false
+	})
+	if _, err := raw.Set(fmt.Sprintf("/tuner%d/channel", tuner), "none", 0); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the pass to let go", 5*time.Second, func() bool {
+		for _, s := range e.hub.Streams() {
+			if s.Background && s.Spec.Frequency == 473000000 {
+				return false
+			}
+		}
+		return true
+	})
+	var m struct{ Failovers float64 }
+	body, _ := io.ReadAll(func() io.Reader { r, _ := http.Get(e.api + "/metrics"); return r.Body }())
+	for _, ln := range strings.Split(string(body), "\n") {
+		if v, ok := strings.CutPrefix(ln, "hdhrmux_stream_failovers_total "); ok {
+			fmt.Sscan(v, &m.Failovers)
+		}
+	}
+	if m.Failovers != 0 {
+		t.Errorf("the pass looked for another tuner (%v failovers)", m.Failovers)
+	}
+}
