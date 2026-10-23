@@ -65,6 +65,8 @@ func (d *Device) uiRoutes(mux *http.ServeMux) {
 		w.Write([]byte(strings.ReplaceAll(string(b), "{{NAME}}", esc(d.cfg.FriendlyName))))
 	})
 	mux.HandleFunc("GET /ui/api/activity", d.handleUIActivity)
+	mux.HandleFunc("GET /ui/api/logs", d.handleUILogs)
+	mux.HandleFunc("GET /ui/api/logs/stream", d.handleUILogsStream)
 	mux.HandleFunc("GET /ui/api/lineup", d.handleUILineup)
 	mux.HandleFunc("PUT /ui/api/lineup/{number}", d.handleUILineupPut)
 	mux.HandleFunc("GET /ui/api/channels", d.handleUIChannels)
@@ -153,8 +155,10 @@ type uiStream struct {
 }
 
 type uiActivity struct {
-	Time   int64 `json:"time"` // unix milliseconds
-	Device struct {
+	Time int64 `json:"time"` // unix milliseconds
+	// TunerNames says how the page names physical tuners: "id" or "ip".
+	TunerNames string `json:"tunerNames"`
+	Device     struct {
 		ID      string `json:"id"`
 		Version string `json:"version,omitempty"`
 		Name    string `json:"name"`
@@ -300,6 +304,7 @@ func (d *Device) activity() uiActivity {
 	var a uiActivity
 	now := time.Now()
 	a.Time = now.UnixMilli()
+	a.TunerNames = d.lv().TunerNames
 	a.Device.ID = hdhrproto.FormatDeviceID(d.cfg.DeviceID)
 	a.Device.Name = d.cfg.FriendlyName
 	a.Device.Model = d.cfg.ModelNumber

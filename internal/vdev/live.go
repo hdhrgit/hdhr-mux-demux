@@ -27,6 +27,7 @@ type Live struct {
 	IdleRelease            time.Duration
 	LogRequests            bool
 	LogOn                  string // normalised log_requests_on: ",web,udp,", or "" for all
+	TunerNames             string // "id" or "ip"
 }
 
 func liveOf(c *Config) Live {
@@ -35,7 +36,7 @@ func liveOf(c *Config) Live {
 		StreamTTL: c.StreamTTL, ScanMode: c.ScanMode, ScanTuners: c.ScanTuners,
 		LineupRefresh: c.LineupRefresh, GuideRefresh: c.GuideRefresh, GuideHold: c.GuideHold,
 		GuideParallel: c.GuideParallel, GuideUnlocked: c.GuideUnlocked, IdleRelease: c.IdleRelease,
-		LogRequests: c.LogRequests, LogOn: normaliseLogOn(c.LogRequestsOn),
+		LogRequests: c.LogRequests, LogOn: normaliseLogOn(c.LogRequestsOn), TunerNames: c.TunerNames,
 	}
 }
 
@@ -46,7 +47,7 @@ func liveFromConfig(c *config.Config) Live {
 		StreamTTL: *c.StreamTTL, ScanMode: c.Lineup.ScanMode, ScanTuners: c.Lineup.ScanTuners,
 		LineupRefresh: time.Duration(c.Lineup.Refresh), GuideRefresh: time.Duration(c.Guide.Refresh),
 		GuideHold: time.Duration(c.Guide.Hold), GuideParallel: c.Guide.Parallel, GuideUnlocked: c.Guide.Unlocked,
-		IdleRelease: time.Duration(c.IdleRelease), LogRequests: c.LogRequests, LogOn: normaliseLogOn(c.LogRequestsOn),
+		IdleRelease: time.Duration(c.IdleRelease), LogRequests: c.LogRequests, LogOn: normaliseLogOn(c.LogRequestsOn), TunerNames: c.TunerNames,
 	}
 }
 
