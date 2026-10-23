@@ -51,7 +51,7 @@ See [config.example.json](../config.example.json). Notable keys:
   `ff02::c`, sending every notification twice (about 22 ms apart), and answers searches on
   each enabled family. The IPv6 side uses the link-local
   address of the interface carrying the default IPv4 route, and is skipped (with a log line)
-  when that interface has none. Measured on the real devices; some TVs (an LG webOS one) only
+  when that interface has none. Some TVs (an LG webOS one) only
   list the mux after hearing the startup announcement.
   `ssdp_atsc3` (default `false`) also announces the ATSC 3.0 primary device
   (`urn:schemas-atsc.org:device:primaryDevice:1.0`, description on `/atsc3/device.xml`: identity

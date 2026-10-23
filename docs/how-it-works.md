@@ -24,7 +24,7 @@
 
 A tuner delivers its whole multiplex, about 19 Mbit/s, however few programs are watched.
 After the HTTP request has started, the mux takes the tuner's lock over (`lockkey force`, then
-a lock key of its own; the stream keeps flowing, checked on real devices) and sets the tuner's
+a lock key of its own; the stream keeps flowing) and sets the tuner's
 `filter` to the PAT, the PMTs, the PSIP guide tables and the audio, video and PCR PIDs of
 programs somebody watches. With one HD program on a multiplex that is roughly 6-9 Mbit/s
 over the LAN instead of 19; a lingering stream nobody watches drops to the tables alone.
@@ -37,7 +37,7 @@ over the LAN instead of 19; a lingering stream nobody watches drops to the table
 * Guide collection is unaffected: the PSIP PIDs always stay in the filter, so the programmes of
   unwatched channels keep arriving.
 * When the stream ends the mux puts the filter back to everything and releases the lock; a
-  lock left behind by a crash expires on the device by itself (under a minute, measured).
+  lock left behind by a crash expires on the device by itself (under a minute).
 * Not applied to ATSC 3.0 (the device already sends one service) and to `guide.unlocked`
   passes (whoever takes such a tuner over would inherit the filter). A device that refuses the
   lock swap is left unmasked. `upstream.mask: false` switches the feature off.
@@ -86,8 +86,8 @@ over the LAN instead of 19; a lingering stream nobody watches drops to the table
 
 ATSC 3.0 tuners do not deliver the whole multiplex: the device only streams
 the one service you select (`/tunerN/chFREQ-SERVICE`), re-muxed into its own
-small transport stream. This was checked on real hardware with both HTTP and
-the control protocol (no whole-multiplex stream, no list of services). So on
+small transport stream. The device offers no whole-multiplex stream and no list of services, over HTTP or over
+the control protocol. So on
 3.0 channels **each service needs its own physical tuner** (identical requests
 still share one) and the multiplexer does no demuxing there.
 

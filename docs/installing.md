@@ -38,13 +38,11 @@ when it is not mapped (or is only an anonymous volume). `--restart unless-stoppe
 
 * *Everything on the machine's addresses (default).* A discovery broadcast sent from this machine
   reaches the multiplexer like any other, and a client adding it by `127.0.0.1` or the machine's own
-  address gets answers (`BaseURL` follows the address the client used). Checked with `hdhrctl` on
-  the same host as the multiplexer.
+  address gets answers (`BaseURL` follows the address the client used).
 * *Local only:* `"bind": "127.0.0.1"` (or Bind address on the Settings page) puts the web, streaming
   and control listeners on the loopback address only and turns SSDP off. Nothing on the network can
   reach it or discover it; add it to the DVR as a device at `127.0.0.1`. Use this when the real
-  devices are already visible to the DVR and you only want the multiplexer's tuners for it. (Not yet
-  tried with Channels DVR itself.)
+  devices are already visible to the DVR and you only want the multiplexer's tuners for it.
 
 The default ports are 80, 5004 and 65001: change `http_listen` if something else on the machine uses
 port 80.
@@ -94,5 +92,5 @@ does that, and pushes the multi-architecture image, when a `vX.Y.Z` tag is pushe
 Debian. What matters is the container's network: it needs its own address on your LAN (bridged, for
 example Proxmox's `vmbr0`, or macvlan), not a NATed container network, or HDHomeRun discovery
 (UDP broadcast) and SSDP (multicast) do not reach it in either direction. Its disk is the container's own
-disk, so the state directory is kept. Not yet tried on LXC.
+disk, so the state directory is kept.
 

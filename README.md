@@ -67,5 +67,5 @@ until you turn **Discoverable** on (Settings, General); until then add it to a D
 | [Lineup, playlist and guide](docs/lineup-and-guide.md) | the lineup, `/playlist.m3u8`, `/epg`, scans |
 | [Web interface](docs/web-interface.md) | the pages, appearance |
 | [Monitoring and load testing](docs/monitoring.md) | `/metrics`, alerts, `cmd/loadtest` |
-| [Tools, hardware checks and limitations](docs/hardware.md) | what was checked on real devices, known limitations |
+| [Tools, device behaviour and limitations](docs/hardware.md) | device behaviour, known limitations |
 | [Release notes](docs/releases) | what changed in each version |
