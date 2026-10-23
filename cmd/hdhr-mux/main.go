@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -27,6 +28,7 @@ import (
 	"hdhrmux/internal/hdhrproto"
 	"hdhrmux/internal/hub"
 	"hdhrmux/internal/lineup"
+	"hdhrmux/internal/logbuf"
 	"hdhrmux/internal/upstream"
 	"hdhrmux/internal/vdev"
 )
@@ -74,6 +76,8 @@ func run() int {
 		fmt.Println("hdhr-mux", version)
 		return 0
 	}
+	logs := logbuf.New(4000)
+	log.SetOutput(io.MultiWriter(os.Stderr, logs))
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 	log.Printf("hdhr-mux %s", version)
 
@@ -219,6 +223,8 @@ func run() int {
 		Hidden:                 !*cfg.Discoverable,
 		LogRequests:            cfg.LogRequests,
 		LogRequestsOn:          cfg.LogRequestsOn,
+		Logs:                   logs,
+		TunerNames:             cfg.TunerNames,
 		IdleRelease:            time.Duration(cfg.IdleRelease),
 		StateDir:               cfg.StateDir,
 		Settings:               settings,

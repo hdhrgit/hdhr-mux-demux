@@ -24,6 +24,7 @@ import (
 	"hdhrmux/internal/hdhrproto"
 	"hdhrmux/internal/hub"
 	"hdhrmux/internal/lineup"
+	"hdhrmux/internal/logbuf"
 	"hdhrmux/internal/upstream"
 	"hdhrmux/internal/vdev"
 )
@@ -75,7 +76,9 @@ func main() {
 	uiDir := flag.String("ui-dir", "", "serve the interface's files from this directory (internal/vdev/ui) so edits show on reload")
 	flag.Parse()
 	vdev.UIDir = *uiDir
-	log.SetFlags(log.Lmsgprefix)
+	logs := logbuf.New(4000)
+	log.SetOutput(io.MultiWriter(os.Stderr, logs))
+	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 
 	var addrs []string
 	var fakes []*fakehdhr.Device
@@ -122,7 +125,7 @@ func main() {
 	cfg, _ := config.Load(cfgPath)
 	dev, err := vdev.New(vdev.Config{DeviceID: hdhrproto.MakeDeviceID(0x10900000), FriendlyName: "HDHomeRun Mux (demo)", Tuners: pool.TotalTuners(),
 		HTTPAddr: *httpAddr, StreamAddr: *streamAddr, ControlAddr: "127.0.0.1:0",
-		GuideHold: 4 * time.Second, StateDir: tmp, Settings: config.NewManager(cfgPath, cfg), Restart: func() { log.Printf("restart requested (the demo just ignores it)") }}, h, lu)
+		GuideHold: 4 * time.Second, Logs: logs, StateDir: tmp, Settings: config.NewManager(cfgPath, cfg), Restart: func() { log.Printf("restart requested (the demo just ignores it)") }}, h, lu)
 	if err != nil {
 		log.Fatal(err)
 	}

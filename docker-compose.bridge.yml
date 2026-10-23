@@ -1,0 +1,24 @@
+# hdhr-mux on a bridge network (no host networking), for hosts where that is not possible.
+#
+# Broadcast does not cross a bridge, so list the devices, and add the multiplexer to the DVR
+# by this host's address (it is not discoverable from outside). After the first start set
+# "Advertised host" on the Settings page to this host's address, so that clients are
+# told an address they can reach.
+services:
+  hdhr-mux:
+    image: ghcr.io/hdhrgit/hdhr-mux:latest
+    container_name: hdhr-mux
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "5004:5004"
+      - "65001:65001"
+      - "65001:65001/udp"
+    environment:
+      HDHOMERUN_DISABLE_DISCOVERY: "true"
+      HDHOMERUN_DEVICES: "192.168.1.10,192.168.1.11"   # your devices
+    volumes:
+      - hdhr-mux-state:/var/lib/hdhr-mux
+
+volumes:
+  hdhr-mux-state:

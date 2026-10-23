@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -116,7 +117,11 @@ func serveUDPAddressed(uc *net.UDPConn, h Handler) {
 		if err != nil {
 			continue
 		}
-		if rep := dispatch(h, addr.IP, req, isOwnAddress(destinationOf(oob[:oobn]))); rep != nil {
+		direct := isOwnAddress(destinationOf(oob[:oobn]))
+		if !direct && isOwnDiscovery(addr) {
+			continue // our own broadcast, heard by our own listener: nobody to answer
+		}
+		if rep := dispatch(h, addr.IP, req, direct); rep != nil {
 			uc.WriteTo(rep.Encode(), addr)
 		}
 	}
@@ -320,6 +325,10 @@ func Discover(targets []string, wait time.Duration) ([]Info, error) {
 		return nil, err
 	}
 	defer pc.Close()
+	if ua, ok := pc.LocalAddr().(*net.UDPAddr); ok {
+		ownDiscovery.Store(ua.Port, time.Now().Add(wait+2*time.Second))
+		defer ownDiscovery.Delete(ua.Port)
+	}
 	req := &Packet{Type: TypeDiscoverReq}
 	req.AddU32(TagDeviceType, DeviceTypeTuner)
 	req.AddU32(TagDeviceID, DeviceIDWildcard)
@@ -356,4 +365,19 @@ func Discover(targets []string, wait time.Duration) ([]Info, error) {
 func ParseLockkey(s string) (uint32, bool) {
 	n, err := strconv.ParseUint(s, 10, 32)
 	return uint32(n), err == nil
+}
+
+// ownDiscovery holds the source ports of the discovery sockets this process has open
+// (port -> until when), so that its own broadcast is not mistaken for a client's when the
+// control listener on the same machine hears it.
+var ownDiscovery sync.Map
+
+// isOwnDiscovery reports whether a datagram came from one of this process's own discovery
+// sockets.
+func isOwnDiscovery(from *net.UDPAddr) bool {
+	v, ok := ownDiscovery.Load(from.Port)
+	if !ok || time.Now().After(v.(time.Time)) {
+		return false
+	}
+	return from.IP.IsLoopback() || isOwnAddress(from.IP)
 }
