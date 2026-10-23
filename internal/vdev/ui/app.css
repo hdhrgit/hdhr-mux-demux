@@ -366,3 +366,5 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .idle-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
 .idle-grid .pill { display: flex; align-items: center; gap: 12px; }
 .idle-grid .pill b { min-width: 22px; text-align: right; margin-right: 0; }
+.nowrap { white-space: nowrap; }
+.changes td { vertical-align: top; }

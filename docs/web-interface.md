@@ -60,6 +60,12 @@ are embedded in the binary.
   the parts that log (`hub`, `guide`, `req`, `upstream` …), Follow, Wrap, Clear and a Download of the whole
   buffer. It is a server-sent event stream (`/ui/api/logs/stream`, plain HTTP: through a proxy it needs no
   WebSocket settings, only no buffering, which the answer asks for). Local network only, like Settings.
+* **Changes** (the Call sign changes button on the Lineup page) – the history of what changed about the channels:
+  a station's call sign or number, a channel the devices now put on another RF channel, a channel that was
+  added or removed, and, read from the multiplexes themselves, a programme that came or went on an RF channel
+  or a new transport stream id. Disabled channels are watched too. It is kept in its own file,
+  `changes.log` in the state directory (one JSON object per line, rotated at 4 MB), each change also appears
+  in the ordinary log as `changes: …`, and the page offers the file for download.
 * **Appearance** (the half-moon button) – System / Light / Dark, and a choice of theme for each:
   Paper, Mist, Mint, Lilac (light) and Slate, Midnight, Dusk, Ember (dark). None of them is pure white
   or pure black. *System* follows the device and switches between your light and dark theme by

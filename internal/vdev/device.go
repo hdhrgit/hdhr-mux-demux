@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"hdhrmux/internal/changelog"
 	"hdhrmux/internal/chanmap"
 	"hdhrmux/internal/chanprefs"
 	"hdhrmux/internal/config"
@@ -202,7 +203,8 @@ type Device struct {
 	// who holds each physical tuner, as read from the device a few seconds ago (Activity page)
 	holderMu    sync.Mutex
 	holderCache map[int]holderInfo
-	merges      *merges.Store // channels said to carry the same thing
+	merges      *merges.Store  // channels said to carry the same thing
+	changes     *changelog.Log // the history of changes (changes.log)
 	sys         sysSampler
 	live        liveState
 	hub         *hub.Hub
@@ -278,6 +280,18 @@ func New(cfg Config, h *hub.Hub, lu *lineup.Lineup) (*Device, error) {
 		mg, _ = merges.Open("")
 	}
 	d.merges = mg
+	changesPath := ""
+	if cfg.StateDir != "" {
+		changesPath = filepath.Join(cfg.StateDir, "changes.log")
+	}
+	cl, err := changelog.Open(changesPath)
+	if err != nil {
+		log.Printf("history of changes: %v (starting with none)", err)
+		cl, _ = changelog.Open("")
+	}
+	d.changes = cl
+	lu.SetObserver(d.noteLineupChange)
+	rf.SetObserver(d.noteRFChange)
 	lu.SetHideATSC3(cfg.HideATSC3)
 	resetStreamCounts() // the counters are process-wide; a new device starts them afresh
 	h.SetLearner(d.learn)
