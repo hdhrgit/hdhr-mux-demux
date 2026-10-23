@@ -344,3 +344,10 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .mchip .x:hover { background: var(--border); color: var(--text); }
 .merge-add { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
 .minput { flex: 1 1 180px; min-width: 0; background: var(--bg-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font: inherit; }
+.fold { display: inline-flex; align-items: center; gap: 8px; background: transparent; border: 0; padding: 4px 6px 4px 0; margin: 0; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; cursor: pointer; }
+.fold svg { transition: transform .15s; }
+.fold[aria-expanded="true"] svg { transform: rotate(90deg); }
+.fold:hover { color: var(--text); }
+.idle-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.idle-grid .pill { display: flex; align-items: center; gap: 12px; }
+.idle-grid .pill b { min-width: 22px; text-align: right; margin-right: 0; }

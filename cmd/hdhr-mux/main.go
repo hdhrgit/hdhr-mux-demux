@@ -219,6 +219,7 @@ func run() int {
 		Hidden:                 !*cfg.Discoverable,
 		LogRequests:            cfg.LogRequests,
 		LogRequestsOn:          cfg.LogRequestsOn,
+		TunerNames:             cfg.TunerNames,
 		IdleRelease:            time.Duration(cfg.IdleRelease),
 		StateDir:               cfg.StateDir,
 		Settings:               settings,
