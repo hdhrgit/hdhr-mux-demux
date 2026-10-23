@@ -8,7 +8,12 @@
   continuity errors and the programs in the PAT/PMT.
 * `cmd/fakehdhr` / `internal/fakehdhr` – a simulated device (control protocol,
   port 5004 HTTP streaming, RTP) that mimics the real quirks listed below. The
-  end-to-end tests in `internal/e2e` run the whole stack against it:
+  end-to-end tests in `internal/e2e` run the whole stack against it. The shared helpers are in
+  `e2e_test.go`; the tests are in files by area (`control_`, `sharing_`, `mask_`, `lineup_`, `guide_`,
+  `activity_`, `advanced_`, `settings_`, `web_`, `logs_test.go`): put a new test in the file of its area
+  and two changes rarely touch the same file.
+
+Run them with:
 
 ```sh
 CGO_ENABLED=1 scripts/go.sh test -race ./...
