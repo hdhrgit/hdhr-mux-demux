@@ -625,12 +625,13 @@ function flushLogs() {
 }
 function renderLogs(root) {
   root.innerHTML = `<div class="page-title"><h1>Logs</h1><p id="log-status">Connecting…</p></div>
-    <div class="toolbar"><label class="search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+    <div class="logbar"><label class="search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
       <input id="lq" type="search" placeholder="Filter the log" aria-label="Filter the log" autocomplete="off"></label>
       <label class="check"><input type="checkbox" id="ltail" ${logs.tail ? 'checked' : ''}> Follow</label>
       <button type="button" class="btn" id="lclear">Clear</button>
-      <a class="btn" href="/ui/api/logs?download=1" download>Download</a></div>
-    <div class="filters log-chips" id="log-chips" role="group" aria-label="Component"></div>
+      <a class="btn" href="/ui/api/logs?download=1" download>Download</a>
+      <span class="sep" aria-hidden="true"></span>
+      <div class="filters" id="log-chips" role="group" aria-label="Component"></div></div>
     <div class="log-box" id="log-box" tabindex="0"></div>`;
   const q = $('#lq'); q.value = logs.q;
   q.addEventListener('input', () => { logs.q = q.value.trim().toLowerCase(); renderLogLines(); });
