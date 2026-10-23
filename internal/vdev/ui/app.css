@@ -358,3 +358,4 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .log-chips small { opacity: .7; margin-left: 2px; }
 .check { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; cursor: pointer; }
 .check input { accent-color: var(--accent); }
+.log-box.nowrap .log-line { white-space: pre; word-break: normal; }

@@ -585,7 +585,7 @@ function renderChannels(root) {
 }
 
 /* ---------- logs page: the log, followed live (server-sent events) ---------- */
-const logs = { lines: [], q: '', comp: 'all', tail: true, es: null, pending: [], raf: 0 };
+const logs = { lines: [], q: '', comp: 'all', tail: true, wrap: (() => { try { return localStorage.getItem('hdhrmux.logwrap') !== '0'; } catch (e) { return true; } })(), es: null, pending: [], raf: 0 };
 const LOG_KEEP = 5000;
 function logComponent(text) {
   const m = /^\d{4}\/\d\d\/\d\d \d\d:\d\d:\d\d(?:\.\d+)? ([a-z0-9_-]+):/i.exec(text);
@@ -628,13 +628,19 @@ function renderLogs(root) {
     <div class="logbar"><label class="search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
       <input id="lq" type="search" placeholder="Filter the log" aria-label="Filter the log" autocomplete="off"></label>
       <label class="check"><input type="checkbox" id="ltail" ${logs.tail ? 'checked' : ''}> Follow</label>
+      <label class="check"><input type="checkbox" id="lwrap" ${logs.wrap ? 'checked' : ''}> Wrap</label>
       <button type="button" class="btn" id="lclear">Clear</button>
       <a class="btn" href="/ui/api/logs?download=1" download>Download</a>
       <span class="sep" aria-hidden="true"></span>
       <div class="filters" id="log-chips" role="group" aria-label="Component"></div></div>
-    <div class="log-box" id="log-box" tabindex="0"></div>`;
+    <div class="log-box${logs.wrap ? '' : ' nowrap'}" id="log-box" tabindex="0"></div>`;
   const q = $('#lq'); q.value = logs.q;
   q.addEventListener('input', () => { logs.q = q.value.trim().toLowerCase(); renderLogLines(); });
+  $('#lwrap').addEventListener('change', (e) => {
+    logs.wrap = e.target.checked;
+    try { localStorage.setItem('hdhrmux.logwrap', logs.wrap ? '1' : '0'); } catch (err) { /* kept for this visit only */ }
+    $('#log-box').classList.toggle('nowrap', !logs.wrap);
+  });
   $('#ltail').addEventListener('change', (e) => { logs.tail = e.target.checked; if (logs.tail) { const b = $('#log-box'); b.scrollTop = b.scrollHeight; } });
   $('#lclear').addEventListener('click', () => { logs.lines = []; renderLogLines(); });
   $('#log-chips').addEventListener('click', (e) => { const b = e.target.closest('[data-comp]'); if (b) { logs.comp = b.dataset.comp; renderLogLines(); } });
