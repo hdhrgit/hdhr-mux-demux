@@ -1,0 +1,21 @@
+# hdhr-mux with Docker Compose:  docker compose up -d   then open http://<this host>/ui/
+#
+# Host networking: the multiplexer finds the HomeRun devices by broadcast and clients find
+# the multiplexer by discovery. Streams are pulled from the devices over HTTP, so nothing
+# needs mapping. docker-compose.bridge.yml is the variant without host networking.
+services:
+  hdhr-mux:
+    image: ghcr.io/hdhrgit/hdhr-mux:latest
+    container_name: hdhr-mux
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      # the lineup, guide, saved settings and the tuner numbering: keep this
+      - hdhr-mux-state:/var/lib/hdhr-mux
+    # environment:
+    #   HDHOMERUN_DISCOVERABLE: "true"                  # answer discovery and announce over SSDP
+    #   HDHOMERUN_DEVICES: "192.168.1.10,192.168.1.11"  # devices to use besides the ones found
+    # command: ["-http", ":8080"]                       # when port 80 is taken
+
+volumes:
+  hdhr-mux-state:

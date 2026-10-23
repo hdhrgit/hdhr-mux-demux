@@ -20,7 +20,17 @@ function dur(sec) {
 }
 const EXT = '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2H2.5v7.5H10V7M7 2h3v3M10 2L5.5 6.5"/></svg>';
 // a physical tuner's id, linking to the device's own status page for it
-const phys = (id, url) => (url ? `<a class="phys mono" href="${esc(url)}" target="_blank" rel="noopener" title="Open this tuner's own status page">${esc(id)}${EXT}</a>` : `<span class="mono">${esc(id)}</span>`);
+// a physical tuner as "DEVICEID/N", or as "address/N" when the multiplexer is set to show addresses (Settings, Miscellaneous)
+let tunerNames = 'id';
+function physName(id, url) {
+  if (tunerNames !== 'ip' || !url) return id;
+  try {
+    const m = /^[0-9A-Fa-f]+\/(\d+)/.exec(id);
+    if (m) return `${new URL(url).hostname}/${m[1]}`;
+  } catch (e) { /* not an address: show the id */ }
+  return id;
+}
+const phys = (id, url) => (url ? `<a class="phys mono" href="${esc(url)}" target="_blank" rel="noopener" title="Open this tuner's own status page (${esc(id)})">${esc(physName(id, url))}${EXT}</a>` : `<span class="mono">${esc(id)}</span>`);
 const level = (v) => (v >= 70 ? '' : v >= 40 ? 'warn' : 'bad');
 
 /* ---------- appearance ---------- */
@@ -167,7 +177,10 @@ function statCard(label, value, unit, sub, extra = '', cls = '') {
   return `<div class="card stat ${cls}"><div class="label">${label}</div><div class="value">${value}<small>${unit}</small></div><div class="sub">${sub}</div>${extra}</div>`;
 }
 
+let lastActivity = null, idleOpen = false; // the free tuners are folded away until asked for
 function updateActivity(a) {
+  lastActivity = a;
+  tunerNames = a.tunerNames || 'id';
   const nowSec = a.time / 1000, S = a.summary;
   patch($('#setup-wrap'), (a.setup ? `<div class="banner warn" role="status" style="margin-top:14px"><b>Nothing to serve yet</b><p>${esc(a.setup)} <a href="#/settings">Open Settings</a></p></div>` : '') + (a.notice ? `<div class="banner" role="status" style="margin-top:14px"><b>Not discoverable</b><p>${esc(a.notice)} <a href="#/settings">Open Settings</a></p></div>` : ''));
   $('#device-sub').textContent = `${a.device.model} · ${a.device.id}${a.device.version ? ' · v' + a.device.version.replace(/^v/, '') : ''} · up ${dur(a.device.uptime)}`;
@@ -191,8 +204,8 @@ function updateActivity(a) {
   $('#n-active').textContent = active.length;
   patch($('#tuners'), active.length ? active.map((t) => tunerHTML(t, nowSec)).join('') :
     `<div class="card empty" style="grid-column:1/-1"><h3>Quiet right now</h3>Nobody is watching. All ${S.tuners} tuners are free.</div>`);
-  patch($('#idle-wrap'), idle.length && active.length ? `<div class="section-title">Free tuners <span class="count">${idle.length}</span></div>
-    <div class="idle-row">${idle.map((t) => `<span class="pill"><b>${t.index}</b>${phys(t.physical, t.physicalUrl)}</span>`).join('')}</div>` : '');
+  patch($('#idle-wrap'), idle.length && active.length ? `<div class="section-title"><button type="button" class="fold" data-fold="idle" aria-expanded="${idleOpen}"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 2l4 4-4 4"/></svg>Free tuners</button> <span class="count">${idle.length}</span></div>
+    ${idleOpen ? `<div class="idle-grid">${idle.map((t) => `<span class="pill"><b>${t.index}</b>${phys(t.physical, t.physicalUrl)}</span>`).join('')}</div>` : ''}` : '');
 
   const bg = a.streams.filter((s) => s.background || s.lingering);
   patch($('#bg-wrap'), bg.length ? `<div class="section-title">Behind the scenes <span class="count">${bg.length}</span></div>
@@ -219,6 +232,11 @@ function renderActivity(root) {
     <div id="setup-wrap"></div>
     <div class="section-title">Active tuners <span class="count" id="n-active">–</span></div>
     <div class="tuners" id="tuners"></div><div id="idle-wrap"></div><div id="bg-wrap"></div><div class="counters" id="counters"></div><div id="sys-wrap"></div>`;
+  root.addEventListener('click', (e) => {
+    if (!e.target.closest('[data-fold="idle"]')) return;
+    idleOpen = !idleOpen;
+    if (lastActivity) updateActivity(lastActivity);
+  });
   const tick = async () => {
     clearTimeout(timer);
     if (stopped) return;
@@ -310,7 +328,7 @@ function renderLineup(root) {
 }
 
 /* ---------- settings page ---------- */
-const GROUPS = ['General', 'Network', 'Devices', 'Streaming', 'Lineup', 'Guide', 'Advanced', 'Diagnostics'];
+const GROUPS = ['General', 'Network', 'Devices', 'Streaming', 'Lineup', 'Guide', 'Advanced', 'Diagnostics', 'Miscellaneous'];
 let settingsState = null;
 
 function ctl(f, v, locked, env) {

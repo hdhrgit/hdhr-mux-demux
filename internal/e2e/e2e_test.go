@@ -3871,3 +3871,18 @@ func TestLogsFollowedLive(t *testing.T) {
 		t.Errorf("without a log buffer there is no logs page: %v %v", r, err)
 	}
 }
+
+// The Activity page is told how to name the physical tuners (Settings, Miscellaneous).
+func TestActivityTellsHowToNameTuners(t *testing.T) {
+	e := setup(t, []int{1}, 1, func(c *vdev.Config) { c.TunerNames = "ip" })
+	var a struct{ TunerNames string }
+	getJSON(t, e.api+"/ui/api/activity", &a)
+	if a.TunerNames != "ip" {
+		t.Errorf("tunerNames %q, want ip", a.TunerNames)
+	}
+	e2 := setup(t, []int{1}, 1, nil)
+	getJSON(t, e2.api+"/ui/api/activity", &a)
+	if a.TunerNames != "" && a.TunerNames != "id" {
+		t.Errorf("default tunerNames %q", a.TunerNames)
+	}
+}

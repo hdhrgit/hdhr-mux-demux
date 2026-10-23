@@ -359,3 +359,10 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 .check { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; cursor: pointer; }
 .check input { accent-color: var(--accent); }
 .log-box.nowrap .log-line { white-space: pre; word-break: normal; }
+.fold { display: inline-flex; align-items: center; gap: 8px; background: transparent; border: 0; padding: 4px 6px 4px 0; margin: 0; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; cursor: pointer; }
+.fold svg { transition: transform .15s; }
+.fold[aria-expanded="true"] svg { transform: rotate(90deg); }
+.fold:hover { color: var(--text); }
+.idle-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.idle-grid .pill { display: flex; align-items: center; gap: 12px; }
+.idle-grid .pill b { min-width: 22px; text-align: right; margin-right: 0; }

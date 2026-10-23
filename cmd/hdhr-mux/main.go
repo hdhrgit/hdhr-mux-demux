@@ -224,6 +224,7 @@ func run() int {
 		LogRequests:            cfg.LogRequests,
 		LogRequestsOn:          cfg.LogRequestsOn,
 		Logs:                   logs,
+		TunerNames:             cfg.TunerNames,
 		IdleRelease:            time.Duration(cfg.IdleRelease),
 		StateDir:               cfg.StateDir,
 		Settings:               settings,

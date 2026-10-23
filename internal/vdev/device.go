@@ -131,6 +131,8 @@ type Config struct {
 	LogRequestsOn string
 	// Logs holds the lines the program logged lately, for the Logs page (nil: no such page).
 	Logs *logbuf.Buffer
+	// TunerNames is how the Activity page names a physical tuner: "id" or "ip".
+	TunerNames string
 
 	// IdleRelease frees a tuned tuner nobody is using after this long.
 	IdleRelease time.Duration
