@@ -36,7 +36,8 @@ type Lineup struct {
 	path      string
 	entries   []Entry
 	rev       atomic.Uint64
-	hideATSC3 atomic.Bool // leave ATSC 3.0 channels out of listings (they still tune)
+	hideATSC3 atomic.Bool                  // leave ATSC 3.0 channels out of listings (they still tune)
+	obs       atomic.Pointer[func(Change)] // told what changed in a merge (see SetObserver)
 }
 
 // Open loads the lineup from path (a missing file is an empty lineup). An
@@ -204,6 +205,20 @@ func (l *Lineup) Modulation(freq uint64) string {
 	return ""
 }
 
+// Change is something a merge of the devices' lineups found different: a channel's name, the RF
+// channel the devices put it on, a channel that appeared or went away.
+type Change struct {
+	Kind         string // callsign, moved, added, removed
+	Channel      string
+	Old, New     string // the names, for callsign, added and removed
+	OldFrequency uint64
+	Frequency    uint64
+}
+
+// SetObserver sets the function told about the changes each Merge finds (a first fill of an
+// empty lineup is not a change). It runs after the lineup is unlocked.
+func (l *Lineup) SetObserver(f func(Change)) { l.obs.Store(&f) }
+
 // DeviceEntry is a channel as listed by a physical device's own lineup.
 type DeviceEntry struct {
 	GuideNumber string
@@ -231,6 +246,7 @@ func (l *Lineup) Merge(devs []DeviceEntry) (added, removed int, err error) {
 		old[e.GuideNumber] = e
 	}
 	var out []Entry
+	var changes []Change
 	seen := map[string]bool{}
 	for _, d := range devs {
 		if seen[d.GuideNumber] {
@@ -240,7 +256,18 @@ func (l *Lineup) Merge(devs []DeviceEntry) (added, removed int, err error) {
 		e, known := old[d.GuideNumber]
 		if !known {
 			added++
+			if len(old) > 0 {
+				changes = append(changes, Change{Kind: "added", Channel: d.GuideNumber, New: d.GuideName})
+			}
 			e = Entry{GuideNumber: d.GuideNumber, Favorite: d.Favorite}
+		}
+		if known {
+			if e.GuideName != "" && d.GuideName != "" && e.GuideName != d.GuideName {
+				changes = append(changes, Change{Kind: "callsign", Channel: d.GuideNumber, Old: e.GuideName, New: d.GuideName})
+			}
+			if d.Frequency != 0 && e.Frequency != 0 && d.Frequency != e.Frequency {
+				changes = append(changes, Change{Kind: "moved", Channel: d.GuideNumber, OldFrequency: e.Frequency, Frequency: d.Frequency})
+			}
 		}
 		e.GuideName, e.VideoCodec, e.AudioCodec, e.HD = d.GuideName, d.VideoCodec, d.AudioCodec, d.HD
 		e.DRM = e.DRM || d.DRM
@@ -261,11 +288,19 @@ func (l *Lineup) Merge(devs []DeviceEntry) (added, removed int, err error) {
 	for g := range old {
 		if !seen[g] {
 			removed++
+			if len(devs) > 0 {
+				changes = append(changes, Change{Kind: "removed", Channel: g, Old: old[g].GuideName})
+			}
 		}
 	}
 	sortEntries(out)
 	l.entries = out
 	l.mu.Unlock()
+	if f := l.obs.Load(); f != nil {
+		for _, c := range changes {
+			(*f)(c)
+		}
+	}
 	return added, removed, l.save()
 }
 

@@ -68,6 +68,7 @@ func (d *Device) uiRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ui/api/logs", d.handleUILogs)
 	mux.HandleFunc("GET /ui/api/logs/stream", d.handleUILogsStream)
 	mux.HandleFunc("GET /ui/api/lineup", d.handleUILineup)
+	mux.HandleFunc("GET /ui/api/changes", d.handleUIChanges)
 	mux.HandleFunc("PUT /ui/api/lineup/{number}", d.handleUILineupPut)
 	mux.HandleFunc("GET /ui/api/channels", d.handleUIChannels)
 	mux.HandleFunc("PUT /ui/api/channels/{number}", d.handleUIChannelPut)

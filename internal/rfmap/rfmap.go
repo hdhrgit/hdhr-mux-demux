@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -57,8 +58,23 @@ type Store struct {
 	rf    map[uint64]*RF
 	saved time.Time
 	dirty bool
-	rev   atomic.Uint64 // changes when the set of programmes of an RF channel does
+	rev   atomic.Uint64                // changes when the set of programmes of an RF channel does
+	obs   atomic.Pointer[func(Change)] // told what changed about an RF channel
 }
+
+// Change is something about an RF channel that was different the last time it was read: a
+// call sign or channel number, a programme that came or went, the transport stream id.
+type Change struct {
+	Kind      string // callsign, number, program-added, program-removed, tsid
+	Frequency uint64
+	Program   uint16
+	Channel   string // the channel number concerned
+	Old, New  string
+}
+
+// SetObserver sets the function told about the changes NoteMux finds. The first time an RF
+// channel is read is not a change.
+func (s *Store) SetObserver(f func(Change)) { s.obs.Store(&f) }
 
 // saveEvery limits how often changes are written out.
 const saveEvery = 30 * time.Second
@@ -106,11 +122,23 @@ func (s *Store) NoteMux(freq uint64, modulation string, tsid uint16, progs []Pro
 	if freq == 0 || len(progs) == 0 {
 		return
 	}
+	var changes []Change
+	defer func() { // runs after the unlock
+		if f := s.obs.Load(); f != nil {
+			for _, c := range changes {
+				(*f)(c)
+			}
+		}
+	}()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r := s.get(freq)
 	if modulation != "" {
 		r.Modulation = modulation
+	}
+	had := len(r.Programs) > 0
+	if had && tsid != 0 && r.TSID != 0 && r.TSID != tsid {
+		changes = append(changes, Change{Kind: "tsid", Frequency: freq, Old: strconv.Itoa(int(r.TSID)), New: strconv.Itoa(int(tsid))})
 	}
 	if tsid != 0 || r.TSID == 0 {
 		r.TSID = tsid
@@ -128,6 +156,25 @@ func (s *Store) NoteMux(freq uint64, modulation string, tsid uint16, progs []Pro
 			}
 		}
 		next[p.Number] = &p
+	}
+	if had {
+		for n, p := range next {
+			o := r.Programs[n]
+			switch {
+			case o == nil:
+				changes = append(changes, Change{Kind: "program-added", Frequency: freq, Program: n, Channel: p.Channel, New: p.Name})
+			case o.Name != "" && p.Name != "" && o.Name != p.Name:
+				changes = append(changes, Change{Kind: "callsign", Frequency: freq, Program: n, Channel: p.Channel, Old: o.Name, New: p.Name})
+			}
+			if o != nil && o.Channel != "" && p.Channel != "" && o.Channel != p.Channel {
+				changes = append(changes, Change{Kind: "number", Frequency: freq, Program: n, Old: o.Channel, New: p.Channel})
+			}
+		}
+		for n, o := range r.Programs {
+			if next[n] == nil {
+				changes = append(changes, Change{Kind: "program-removed", Frequency: freq, Program: n, Channel: o.Channel, Old: o.Name})
+			}
+		}
 	}
 	r.Programs = next
 	s.rev.Add(1)

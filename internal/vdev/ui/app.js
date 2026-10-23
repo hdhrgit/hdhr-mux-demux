@@ -294,6 +294,7 @@ function renderLineup(root) {
     <div class="toolbar"><label class="search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
       <input id="q" type="search" placeholder="Search channels and programmes" aria-label="Search channels and programmes" autocomplete="off"></label>
       <div class="filters" role="group" aria-label="Filter">${[['all', 'All'], ['hd', 'HD'], ['live', 'Being watched'], ['fav', 'Favourites'], ['off', 'Disabled']].map(([k, n]) => `<button type="button" data-f="${k}" aria-pressed="${lineup.filter === k}">${n}</button>`).join('')}</div>
+      <a class="btn" href="#/changes" title="The history of call sign, number and place changes">Call sign changes</a>
       <a class="btn" href="/playlist.m3u8" title="For players that cannot use the HDHomeRun protocol; guide link included">M3U8 playlist</a></div>
     <div class="card table-card"><table class="lineup"><thead><tr><th class="c-fav"></th><th class="c-num">Ch</th><th>Channel</th><th>Now</th><th class="c-next">Next</th><th class="c-rf">RF</th><th class="c-act"></th></tr></thead><tbody id="lineup-body"><tr><td colspan="7"><div class="skeleton" style="margin:12px"></div></td></tr></tbody></table></div>`;
   const q = $('#q'); q.value = lineup.q;
@@ -682,17 +683,55 @@ function renderLogs(root) {
   cleanup = () => { if (logs.es) { logs.es.close(); logs.es = null; } if (logs.raf) { cancelAnimationFrame(logs.raf); logs.raf = 0; } };
 }
 
+/* ---------- changes page: the history of call signs, numbers and places ---------- */
+const hist = { data: [], q: '', group: 'all' };
+const CHANGE_GROUPS = [['all', 'All'], ['callsign', 'Call signs'], ['place', 'Numbers and places'], ['lineup', 'Added and removed'], ['rf', 'RF channels']];
+function changeGroup(kind) {
+  if (kind === 'callsign') return 'callsign';
+  if (kind === 'moved' || kind === 'number') return 'place';
+  if (kind === 'added' || kind === 'removed') return 'lineup';
+  return 'rf';
+}
+function updateChanges() {
+  const q = hist.q.trim().toLowerCase();
+  const rows = hist.data.filter((e) => (hist.group === 'all' || changeGroup(e.kind) === hist.group) && (!q || `${e.channel} ${e.text}`.toLowerCase().includes(q)));
+  $('#chg-count').textContent = `${hist.data.length} change${hist.data.length === 1 ? '' : 's'} recorded`;
+  patch($('#chg-body'), rows.length ? rows.map((e) => `<tr><td class="mono nowrap">${esc(new Date(e.time).toLocaleString())}</td>
+      <td>${e.channel ? `<span class="chan">${esc(e.channel)}</span>` : ''}</td><td>${esc(e.text)}</td></tr>`).join('') :
+    `<tr><td colspan="3"><div class="empty"><h3>${hist.data.length ? 'Nothing matches' : 'No changes yet'}</h3>${hist.data.length ? 'Try a different filter.' : 'A station that changes its call sign or number, a channel that moves to another RF channel, or a programme that comes or goes is listed here when the multiplexer notices.'}</div></td></tr>`);
+}
+function renderChanges(root) {
+  root.innerHTML = `<div class="page-title"><h1>Changes</h1><p><span id="chg-count">–</span>: call signs, channel numbers and where on the air the channels are, disabled channels included.</p></div>
+    <div class="toolbar"><label class="search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <input id="chq" type="search" placeholder="Filter the history" aria-label="Filter the history" autocomplete="off"></label>
+      <div class="filters" role="group" aria-label="Kind">${CHANGE_GROUPS.map(([k, n]) => `<button type="button" data-g="${k}" aria-pressed="${hist.group === k}">${n}</button>`).join('')}</div>
+      <a class="btn" href="/ui/api/changes?download=1" download>Download</a></div>
+    <div class="card table-card"><table class="lineup changes"><thead><tr><th>When</th><th>Channel</th><th>What changed</th></tr></thead><tbody id="chg-body"><tr><td colspan="3"><div class="skeleton" style="margin:12px"></div></td></tr></tbody></table></div>`;
+  const q = $('#chq'); q.value = hist.q;
+  q.addEventListener('input', () => { hist.q = q.value; updateChanges(); });
+  $$('.filters button', root).forEach((b) => b.addEventListener('click', () => {
+    hist.group = b.dataset.g; $$('.filters button', root).forEach((x) => x.setAttribute('aria-pressed', String(x === b))); updateChanges();
+  }));
+  const load = async () => {
+    clearTimeout(timer);
+    if (stopped) return;
+    try { hist.data = (await getJSON('/ui/api/changes?n=1000')).events; setConn(true); updateChanges(); } catch (e) { setConn(false); }
+    if (!stopped) timer = setTimeout(load, 20000);
+  };
+  load();
+}
+
 /* ---------- router ---------- */
 let cleanup = null; // what the page that is leaving has to undo (the log stream)
-const PAGES = { activity: renderActivity, lineup: renderLineup, advanced: renderChannels, logs: renderLogs, settings: renderSettings };
+const PAGES = { activity: renderActivity, lineup: renderLineup, advanced: renderChannels, logs: renderLogs, changes: renderChanges, settings: renderSettings };
 function route() {
   stopped = true; clearTimeout(timer);
   if (cleanup) { cleanup(); cleanup = null; }
   let name = (location.hash.replace(/^#\/?/, '') || 'activity').split('/')[0];
   if (name === 'channels') name = 'advanced'; // its old name
   const page = PAGES[name] ? name : 'activity';
-  $$('.tabs a').forEach((a) => { if (a.dataset.tab === page) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
-  document.title = `${{ activity: 'Activity', lineup: 'Lineup', advanced: 'Advanced', logs: 'Logs', settings: 'Settings' }[page]} · ${$('.brand-text b').textContent}`;
+  $$('.tabs a').forEach((a) => { if (a.dataset.tab === (page === 'changes' ? 'lineup' : page)) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+  document.title = `${{ activity: 'Activity', lineup: 'Lineup', advanced: 'Advanced', logs: 'Logs', changes: 'Changes', settings: 'Settings' }[page]} · ${$('.brand-text b').textContent}`;
   stopped = false;
   PAGES[page]($('#app'));
 }
