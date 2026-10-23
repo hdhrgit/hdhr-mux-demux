@@ -190,14 +190,18 @@ func (c *Config) defaults() {
 }
 
 type Device struct {
-	cfg    Config
-	rf     *rfmap.Store
-	prefs  *chanprefs.Store // choices made on the Channels page
-	merges *merges.Store    // channels said to carry the same thing
-	sys    sysSampler
-	live   liveState
-	hub    *hub.Hub
-	lineup *lineup.Lineup
+	cfg   Config
+	rf    *rfmap.Store
+	prefs *chanprefs.Store // choices made on the Channels page
+
+	// who holds each physical tuner, as read from the device a few seconds ago (Activity page)
+	holderMu    sync.Mutex
+	holderCache map[int]holderInfo
+	merges      *merges.Store // channels said to carry the same thing
+	sys         sysSampler
+	live        liveState
+	hub         *hub.Hub
+	lineup      *lineup.Lineup
 
 	tuners []*VTuner
 
