@@ -40,12 +40,13 @@ are embedded in the binary.
   after a new start, and a new transmitter shows up within `guide.refresh`.
   The page is also where the choices are made (saved in `<state_dir>/channels.json`; they apply at once,
   and need the same permission as the settings page):
-  * **Video** (a checkbox per RF channel): where `/auto/` may tune the channel. Several can be on, but not none: whether a channel
+  * **Video** (a checkbox per RF channel): where `/auto/` may tune the channel. By default only the lineup's RF
+    channel is ticked; tick another to allow it. Several can be on, but not none: whether a channel
     exists at all is decided in the Lineup (the star column). An RF channel that every channel on it has switched off is not tuned for the guide.
   * **First**: the place tried first. A request first rides a session that is already open at any allowed
     place, then tunes the first choice, then the others, one after the other until one works. Without a
-    choice the place from the devices' lineups is first. Other places are used only when
-    `auto_join_other_locations` is on (or the place is the chosen first).
+    choice the place from the devices' lineups is first. Other places are used only when they are ticked
+    (or `auto_join_other_locations` is on).
   * **EPG**: which RF channel the guide comes from. Without a choice it is the one that goes furthest
     ahead. Guides of different RF channels are never merged.
   Each choice has a "use the lineup's place" / "use automatic" link to undo it.

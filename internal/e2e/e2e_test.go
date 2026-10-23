@@ -3962,3 +3962,51 @@ func TestActivityShowsFullMultiplexForUnfilteredTuner(t *testing.T) {
 		t.Errorf("watching %+v, want Full multiplex", w)
 	}
 }
+
+// By default only the lineup's RF channel is used for a channel received on two: the other
+// shows as not ticked on the Advanced tab until a person allows it.
+func TestOtherRFChannelsAreOffUntilAllowed(t *testing.T) {
+	testChannels = append(append([]fakehdhr.Channel{}, channels...),
+		fakehdhr.Channel{Frequency: 191000000, TSID: 9, Programs: []fakehdhr.Program{{Number: 5, VChannel: "7.1", Name: "ALPHA-2"}, {Number: 6, VChannel: "9.9", Name: "ZETA"}}})
+	defer func() { testChannels = nil }()
+	e := setup(t, []int{3}, 3, func(c *vdev.Config) { c.GuideHold = 2 * time.Second })
+	e.lu.Replace([]lineup.Entry{
+		{GuideNumber: "7.1", GuideName: "ALPHA", Frequency: 177000000, Program: 1},
+		{GuideNumber: "9.9", GuideName: "ZETA", Frequency: 191000000, Program: 6},
+	})
+	if _, _, err := e.dev.GuidePass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	offs := func() map[uint64]bool {
+		var v struct {
+			Channels []struct {
+				Number    string
+				Locations []struct {
+					Frequency uint64
+					Off       bool
+				}
+			}
+		}
+		getJSON(t, e.api+"/ui/api/channels", &v)
+		out := map[uint64]bool{}
+		for _, c := range v.Channels {
+			if c.Number == "7.1" {
+				for _, l := range c.Locations {
+					out[l.Frequency] = l.Off
+				}
+			}
+		}
+		return out
+	}
+	if o := offs(); len(o) != 2 || o[177000000] || !o[191000000] {
+		t.Fatalf("by default only the lineup's place is ticked: %v", o)
+	}
+	req, _ := http.NewRequest("PUT", e.api+"/ui/api/channels/7.1", strings.NewReader(`{"off":[]}`))
+	req.Header.Set("X-Requested-With", "hdhr-mux-ui")
+	if r, err := http.DefaultClient.Do(req); err != nil || r.StatusCode != 200 {
+		t.Fatalf("PUT: %v %v", r, err)
+	}
+	if o := offs(); o[177000000] || o[191000000] {
+		t.Errorf("after ticking the other place both are on: %v", o)
+	}
+}

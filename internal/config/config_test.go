@@ -215,15 +215,18 @@ func TestSettingsCoverClientSharing(t *testing.T) {
 	}
 	m := NewManager(cfgPath, c)
 	v := m.Values()
-	for _, k := range []string{"auto_join_direct", "auto_join_other_locations", "evict_scans"} {
+	for _, k := range []string{"auto_join_direct", "evict_scans"} {
 		if v[k] != true {
 			t.Errorf("%s = %v, want true by default", k, v[k])
 		}
 	}
+	if v["auto_join_other_locations"] != false {
+		t.Errorf("auto_join_other_locations = %v, want false by default (the lineup's place only)", v["auto_join_other_locations"])
+	}
 	if v["lineup.scan_mode"] != "device" {
 		t.Errorf("scan_mode %v", v["lineup.scan_mode"])
 	}
-	if err := m.Save(map[string]any{"auto_join_direct": false, "evict_scans": false, "stream_ttl": "50", "lineup.scan_mode": "own"}); err != nil {
+	if err := m.Save(map[string]any{"auto_join_direct": false, "evict_scans": false, "auto_join_other_locations": true, "stream_ttl": "50", "lineup.scan_mode": "own"}); err != nil {
 		t.Fatal(err)
 	}
 	c2, _ := Load(cfgPath)
