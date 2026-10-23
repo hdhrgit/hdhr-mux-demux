@@ -456,6 +456,13 @@ func (st *stream) monitor() {
 			stalled = ok && !idleOK && s.Locked() && time.Since(time.Unix(0, st.lastData.Load())) > stallLimit
 			reset = ok && (s.Channel == "none" || s.Channel == "") // someone cleared the tuner
 		}
+		if reset && lease.Unlocked() {
+			// An unlocked listener has no claim on the tuner: if its channel was cleared somebody
+			// else has it (or is about to). Let go; looking for another tuner would only take one.
+			log.Printf("hub: %s on %s was cleared by somebody else; letting it go", st.key, lease.ID())
+			go st.h.dropStream(st)
+			return
+		}
 		if fails >= 3 || stalled || reset || broken {
 			log.Printf("hub: channel %s on %s failing (status errors=%d stalled=%v reset=%v broken=%v); retuning", st.key, lease.ID(), fails, stalled, reset, broken)
 			if st.failover(lease) {
