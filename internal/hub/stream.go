@@ -206,6 +206,12 @@ func (st *stream) reader() {
 			}
 			// The source ended or broke. If this is still the live lease the
 			// monitor must replace it right away; otherwise we were swapped.
+			// A stream that is being stopped closes its receiver: that is not a break.
+			select {
+			case <-st.stop:
+				return
+			default:
+			}
 			if st.currentLease() == lease {
 				select {
 				case st.broken <- struct{}{}:
@@ -436,6 +442,11 @@ func (st *stream) monitor() {
 		case <-st.broken:
 			broken = true
 		case <-t.C:
+		}
+		select { // stopped while we were busy: not a failure to act on, whatever else is ready
+		case <-st.stop:
+			return
+		default:
 		}
 		lease := st.currentLease()
 		if lease.Unlocked() && lease.Claimed() {
